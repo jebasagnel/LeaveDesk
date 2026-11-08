@@ -1,0 +1,22 @@
+{
+  "name": "leavedesk-backend",
+  "version": "1.0.0",
+  "description": "LeaveDesk Production Backend (3 Microservices Gateway, MySQL Database & Standalone Runners)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:all": "node server.js",
+    "auth": "node services/auth-service/index.js",
+    "workflow": "node services/workflow-service/index.js",
+    "calendar": "node services/calendar-service/index.js",
+    "db:verify": "node scripts/verify-db.js",
+    "db:migrate": "node -e \"require('./mysql-db').initMySQL()\""
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "mysql2": "^3.11.0",
+    "ws": "^8.17.0"
+  }
+}

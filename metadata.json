@@ -1,0 +1,6 @@
+{
+  "name": "LeaveDesk",
+  "description": "Mobile-first leave management app with multi-tier approvals, team calendars, and real-time policies.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

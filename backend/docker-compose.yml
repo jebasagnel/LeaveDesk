@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  # 1. MySQL 8.0 Database with Automatic Schema Initialization
+  mysql:
+    image: mysql:8.0
+    container_name: leavedesk_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: leavedesk_db
+      MYSQL_USER: leavedesk
+      MYSQL_PASSWORD: leavedesk_pass
+      MYSQL_ROOT_PASSWORD: rootpassword
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./schema.sql:/docker-entrypoint-initdb.d/01_init.sql
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # 2. Web UI Database Manager (phpMyAdmin) on Port 8085
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: leavedesk_phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_USER: root
+      PMA_PASSWORD: rootpassword
+    ports:
+      - "8085:80"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  # 3. LeaveDesk 3 Microservices Cluster & Gateway
+  backend:
+    image: node:22-alpine
+    container_name: leavedesk_backend
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      NODE_ENV: production
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: leavedesk
+      MYSQL_PASSWORD: leavedesk_pass
+      MYSQL_DATABASE: leavedesk_db
+      AUTH_PORT: 8081
+      WORKFLOW_PORT: 8082
+      CALENDAR_PORT: 8083
+      GATEWAY_PORT: 8084
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+      - "8082:8082"
+      - "8083:8083"
+      - "8084:8084"
+    command: sh -c "npm install && node server.js"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql_data:
