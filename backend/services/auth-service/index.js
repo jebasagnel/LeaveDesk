@@ -10,6 +10,7 @@ app.use(express.json());
 // POST /api/v1/auth/login
 app.post('/api/v1/auth/login', async (req, res) => {
   try {
+    console.log('[Auth Service] POST /auth/login - Body:', { identifier: req.body?.identifier, organization: req.body?.organization });
     const { identifier, password, organization } = req.body;
     if (!identifier || !password) {
       return res.status(400).json({ error: "Identifier and password are required." });
@@ -32,6 +33,20 @@ app.post('/api/v1/auth/login', async (req, res) => {
     // Create JWT token payload simulator
     const token = `jwt_live_${user.id}_${Date.now()}`;
     const refreshToken = `ref_live_${user.id}_${Date.now()}`;
+
+    // Automatically record login event in MySQL audit_logs
+    try {
+      await db.addAudit(
+        user.name,
+        user.role,
+        "USER_LOGIN",
+        user.employeeId,
+        "User authenticated via credentials",
+        `Organization: ${organization || "Default"} • Email: ${user.email}`
+      );
+    } catch (auditErr) {
+      console.error("Audit login write error:", auditErr.message);
+    }
 
     const { password: _, ...safeUser } = user;
     res.json({

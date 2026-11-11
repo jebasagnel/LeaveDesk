@@ -1,16 +1,35 @@
 package com.example.data
 
+import android.content.Context
 import com.example.model.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.util.UUID
 
 class LeaveDeskRepository {
+
+  private var storageManager: LeaveDeskStorageManager? = null
+  private val networkClient = LeaveDeskNetworkClient()
+  private val repositoryScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+  private val _backendState = MutableStateFlow(
+    BackendConnectionState(
+      status = BackendStatus.ONLINE,
+      serverUrl = LeaveDeskStorageManager.DEFAULT_BACKEND_URL
+    )
+  )
+  val backendState: StateFlow<BackendConnectionState> = _backendState.asStateFlow()
 
   // Current logged in user
   private val _currentUser = MutableStateFlow(DEMO_USERS[3]) // Default Alex Chen (EMP101)
@@ -19,6 +38,96 @@ class LeaveDeskRepository {
   // Authentication session state
   private val _isLoggedIn = MutableStateFlow(false)
   val isLoggedIn: StateFlow<Boolean> = _isLoggedIn.asStateFlow()
+
+  fun initContext(context: Context) {
+    if (storageManager != null) return
+    val manager = LeaveDeskStorageManager(context)
+    storageManager = manager
+
+    val savedUrl = manager.loadBackendUrl()
+    _backendState.value = _backendState.value.copy(serverUrl = savedUrl)
+
+    // Restore saved session
+    val savedUserId = manager.loadLoggedInUserId()
+    val savedIsLoggedIn = manager.loadIsLoggedIn()
+    if (savedUserId != null) {
+      val foundUser = _users.value.find { it.id == savedUserId }
+      if (foundUser != null) {
+        _currentUser.value = foundUser
+        _isLoggedIn.value = savedIsLoggedIn
+      }
+    }
+
+    // Restore saved datasets if available
+    manager.loadLeaveRequests()?.let { savedRequests ->
+      if (savedRequests.isNotEmpty()) _leaveRequests.value = savedRequests
+    }
+    manager.loadUserBalances()?.let { savedBalances ->
+      if (savedBalances.isNotEmpty()) _userBalances.value = savedBalances
+    }
+    manager.loadChatMessages()?.let { savedChat ->
+      if (savedChat.isNotEmpty()) _chatMessages.value = savedChat
+    }
+    manager.loadCompanyHolidays()?.let { savedHolidays ->
+      if (savedHolidays.isNotEmpty()) _companyHolidays.value = savedHolidays
+    }
+    manager.loadAuditLogs()?.let { savedLogs ->
+      if (savedLogs.isNotEmpty()) _auditLogs.value = savedLogs
+    }
+
+    // Check backend connection
+    testBackendConnection()
+  }
+
+  fun updateBackendUrl(newUrl: String) {
+    val clean = newUrl.trim()
+    storageManager?.saveBackendUrl(clean)
+    _backendState.value = _backendState.value.copy(serverUrl = clean, status = BackendStatus.CONNECTING)
+    testBackendConnection()
+  }
+
+  fun testBackendConnection() {
+    val currentUrl = _backendState.value.serverUrl
+    repositoryScope.launch {
+      val (isUp, message) = networkClient.checkHealth(currentUrl)
+      _backendState.value = _backendState.value.copy(
+        status = if (isUp) BackendStatus.ONLINE else BackendStatus.OFFLINE_CACHE,
+        message = message,
+        lastSyncTime = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))
+      )
+      if (isUp) {
+        syncWithLiveBackend()
+      }
+    }
+  }
+
+  fun syncWithLiveBackend() {
+    val currentUrl = _backendState.value.serverUrl
+    repositoryScope.launch {
+      try {
+        val remoteRequests = networkClient.fetchLeaveRequests(currentUrl)
+        if (!remoteRequests.isNullOrEmpty()) {
+          val existingIds = _leaveRequests.value.map { it.id }.toSet()
+          val newOnes = remoteRequests.filter { it.id !in existingIds }
+          if (newOnes.isNotEmpty()) {
+            _leaveRequests.value = newOnes + _leaveRequests.value
+            storageManager?.saveLeaveRequests(_leaveRequests.value)
+          }
+        }
+      } catch (_: Exception) {}
+    }
+  }
+
+  fun persistAll() {
+    storageManager?.let { sm ->
+      sm.saveLeaveRequests(_leaveRequests.value)
+      sm.saveUserBalances(_userBalances.value)
+      sm.saveChatMessages(_chatMessages.value)
+      sm.saveCompanyHolidays(_companyHolidays.value)
+      sm.saveAuditLogs(_auditLogs.value)
+      sm.saveAuthSession(_currentUser.value.id, _isLoggedIn.value)
+    }
+  }
 
   fun login(identifier: String, pass: String, organization: String? = null): Boolean {
     val cleanId = identifier.trim()
@@ -40,7 +149,27 @@ class LeaveDeskRepository {
     return if (user != null && (user.password == pass || pass == "password123")) {
       _currentUser.value = user
       _isLoggedIn.value = true
+      persistAll()
       showToast("Signed in as ${user.name} (${user.role.displayName})")
+      addAuditLog(
+        actor = user,
+        action = "USER_LOGIN",
+        target = user.employeeId,
+        reason = "User authenticated via login credentials",
+        details = "Device: Android / Preview Client • Org: ${organization ?: "Default"}"
+      )
+      repositoryScope.launch {
+        networkClient.login(_backendState.value.serverUrl, cleanId, pass)
+        networkClient.logAudit(
+          baseUrl = _backendState.value.serverUrl,
+          actorName = user.name,
+          actorRole = user.role.name,
+          action = "USER_LOGIN",
+          target = user.employeeId,
+          reason = "User authenticated via login credentials",
+          details = "Device: Android / Preview Client"
+        )
+      }
       true
     } else {
       false
@@ -49,6 +178,7 @@ class LeaveDeskRepository {
 
   fun logout() {
     _isLoggedIn.value = false
+    persistAll()
     showToast("Signed out successfully.")
   }
 
@@ -103,6 +233,24 @@ class LeaveDeskRepository {
   fun switchUser(user: User) {
     _currentUser.value = user
     showToast("Logged in as ${user.name} (${user.role.displayName})")
+    addAuditLog(
+      actor = user,
+      action = "USER_LOGIN",
+      target = user.employeeId,
+      reason = "Switched preview profile to ${user.name}",
+      details = "Role: ${user.role.displayName} • Group: ${user.groupName}"
+    )
+    repositoryScope.launch {
+      networkClient.logAudit(
+        baseUrl = _backendState.value.serverUrl,
+        actorName = user.name,
+        actorRole = user.role.name,
+        action = "USER_LOGIN",
+        target = user.employeeId,
+        reason = "Logged in as ${user.name} (${user.role.displayName})",
+        details = "Preview profile switched to ${user.name}"
+      )
+    }
   }
 
   fun switchRole(role: UserRole) {
@@ -356,6 +504,19 @@ class LeaveDeskRepository {
     )
 
     _leaveRequests.value = listOf(request) + _leaveRequests.value
+    persistAll()
+    repositoryScope.launch {
+      networkClient.submitLeave(_backendState.value.serverUrl, request)
+      networkClient.logAudit(
+        baseUrl = _backendState.value.serverUrl,
+        actorName = user.name,
+        actorRole = user.role.name,
+        action = "APPLY_LEAVE",
+        target = "${request.id} (${user.name})",
+        reason = reason.ifBlank { "Leave application submitted" },
+        details = "${validation.workingDays} days ${leaveType.code} ($startDate to $endDate)"
+      )
+    }
 
     // Notify approver
     val approverRecipientId = if (isTl) {
@@ -449,6 +610,7 @@ class LeaveDeskRepository {
       )
       currentRequests[index] = updated
       _leaveRequests.value = currentRequests
+      persistAll()
 
       val ceo = _users.value.first { it.role == UserRole.CEO }
       addNotification(
@@ -475,6 +637,7 @@ class LeaveDeskRepository {
       currentRequests[index] = updated
       _leaveRequests.value = currentRequests
       deductBalance(request.userId, request.leaveType, request.workingDays)
+      persistAll()
 
       addNotification(
         recipientUserId = request.userId,
@@ -493,6 +656,28 @@ class LeaveDeskRepository {
         )
       }
       showToast("Request approved! Calendar updated and balance deducted.")
+    }
+
+    repositoryScope.launch {
+      networkClient.submitDecision(
+        baseUrl = _backendState.value.serverUrl,
+        reqId = request.id,
+        role = "TEAM_LEAD",
+        decision = "APPROVED",
+        remarks = remarks,
+        userId = request.userId,
+        leaveType = request.leaveType.name,
+        workingDays = request.workingDays
+      )
+      networkClient.logAudit(
+        baseUrl = _backendState.value.serverUrl,
+        actorName = approver.name,
+        actorRole = approver.role.name,
+        action = "APPROVE_LEAVE",
+        target = "${request.id} (${request.userName})",
+        reason = remarks ?: "Approved by Team Lead",
+        details = "Requires CEO: ${request.requiresCeoApproval} • ${request.workingDays} days ${request.leaveType.name}"
+      )
     }
 
     addAuditLog(
@@ -527,6 +712,29 @@ class LeaveDeskRepository {
     )
     currentRequests[index] = updated
     _leaveRequests.value = currentRequests
+    persistAll()
+
+    repositoryScope.launch {
+      networkClient.submitDecision(
+        baseUrl = _backendState.value.serverUrl,
+        reqId = request.id,
+        role = "TEAM_LEAD",
+        decision = "REJECTED",
+        remarks = reason,
+        userId = request.userId,
+        leaveType = request.leaveType.name,
+        workingDays = request.workingDays
+      )
+      networkClient.logAudit(
+        baseUrl = _backendState.value.serverUrl,
+        actorName = approver.name,
+        actorRole = approver.role.name,
+        action = "REJECT_LEAVE",
+        target = "${request.id} (${request.userName})",
+        reason = reason,
+        details = "Rejected by Team Lead • ${request.workingDays} days ${request.leaveType.name}"
+      )
+    }
 
     // Post official rejection decision directly into chat between TL and Employee
     val threadId = "thread_emp_${request.userId}_tl"
@@ -578,6 +786,17 @@ class LeaveDeskRepository {
     )
     currentRequests[index] = updated
     _leaveRequests.value = currentRequests
+    persistAll()
+
+    repositoryScope.launch {
+      networkClient.submitQuery(
+        _backendState.value.serverUrl,
+        request.id,
+        "TEAM_LEAD",
+        question,
+        suggestedDates
+      )
+    }
 
     // Post official query directly into chat between TL and Employee
     val threadId = "thread_emp_${request.userId}_tl"
@@ -734,6 +953,29 @@ class LeaveDeskRepository {
     currentRequests[index] = updated
     _leaveRequests.value = currentRequests
     deductBalance(request.userId, request.leaveType, request.workingDays)
+    persistAll()
+
+    repositoryScope.launch {
+      networkClient.submitDecision(
+        baseUrl = _backendState.value.serverUrl,
+        reqId = request.id,
+        role = "CEO",
+        decision = "APPROVED",
+        remarks = remarks,
+        userId = request.userId,
+        leaveType = request.leaveType.name,
+        workingDays = request.workingDays
+      )
+      networkClient.logAudit(
+        baseUrl = _backendState.value.serverUrl,
+        actorName = ceo.name,
+        actorRole = ceo.role.name,
+        action = if (isException) "CEO Exception Approval" else "CEO Final Approval",
+        target = "${request.id} (${request.userName})",
+        reason = remarks.ifBlank { "Approved by CEO" },
+        details = "${request.workingDays} days ${request.leaveType.code}. Exception: $isException"
+      )
+    }
 
     addNotification(
       recipientUserId = request.userId,
@@ -789,6 +1031,29 @@ class LeaveDeskRepository {
     )
     currentRequests[index] = updated
     _leaveRequests.value = currentRequests
+    persistAll()
+
+    repositoryScope.launch {
+      networkClient.submitDecision(
+        baseUrl = _backendState.value.serverUrl,
+        reqId = request.id,
+        role = "CEO",
+        decision = "REJECTED",
+        remarks = reason,
+        userId = request.userId,
+        leaveType = request.leaveType.name,
+        workingDays = request.workingDays
+      )
+      networkClient.logAudit(
+        baseUrl = _backendState.value.serverUrl,
+        actorName = ceo.name,
+        actorRole = ceo.role.name,
+        action = "REJECT_LEAVE",
+        target = "${request.id} (${request.userName})",
+        reason = reason,
+        details = "Rejected by CEO • ${request.workingDays} days ${request.leaveType.name}"
+      )
+    }
 
     // Post official rejection directly into chat thread between Employee and CEO
     val threadId = "thread_emp_${request.userId}_ceo"
@@ -848,6 +1113,17 @@ class LeaveDeskRepository {
     )
     currentRequests[index] = updated
     _leaveRequests.value = currentRequests
+    persistAll()
+
+    repositoryScope.launch {
+      networkClient.submitQuery(
+        _backendState.value.serverUrl,
+        request.id,
+        "CEO",
+        question,
+        null
+      )
+    }
 
     // Dedicated chat thread between employee and CEO
     val threadId = "thread_emp_${request.userId}_ceo"
@@ -906,6 +1182,11 @@ class LeaveDeskRepository {
       )
     }
     _companyHolidays.value = existingList
+    persistAll()
+
+    repositoryScope.launch {
+      networkClient.toggleLock(_backendState.value.serverUrl, date.toString(), newLockStatus)
+    }
 
     val statusText = if (newLockStatus) "LOCKED by CEO (TL overrides disabled)" else "UNLOCKED (Open for TL team events)"
     addAuditLog(
@@ -1124,6 +1405,7 @@ class LeaveDeskRepository {
     )
     currentRequests[index] = updated
     _leaveRequests.value = currentRequests
+    persistAll()
 
     val tlId = _groups.value.find { it.id == user.groupId }?.tlUserId ?: _users.value.first { it.role == UserRole.CEO }.id
     addNotification(
@@ -1197,6 +1479,11 @@ class LeaveDeskRepository {
       isOfficialDecision = isOfficialDecision
     )
     _chatMessages.value = _chatMessages.value + msg
+    persistAll()
+
+    repositoryScope.launch {
+      networkClient.sendChatMessage(_backendState.value.serverUrl, msg)
+    }
 
     // Notify CEO if employee replied with proofs in the query thread
     if (sender.role == UserRole.EMPLOYEE && threadId.contains("ceo")) {
@@ -1262,7 +1549,12 @@ class LeaveDeskRepository {
               title = "Team Lead: ${tlUser.name}",
               subtitle = "Direct Line • Leave reviews, handovers & questions",
               role = UserRole.TEAM_LEAD,
-              targetUserId = tlUser.id
+              targetUserId = tlUser.id,
+              groupId = tlUser.groupId,
+              groupName = tlUser.groupName,
+              employeeId = tlUser.employeeId,
+              designation = tlUser.designation,
+              avatarInitials = tlUser.avatarInitials
             )
           )
         }
@@ -1278,7 +1570,12 @@ class LeaveDeskRepository {
             role = UserRole.CEO,
             targetUserId = ceoUser.id,
             isLocked = !isUnlocked,
-            lockReason = "An employee cannot initiate contact with the CEO. Communication unlocks automatically when the CEO queries on an approval."
+            lockReason = "An employee cannot initiate contact with the CEO. Communication unlocks automatically when the CEO queries on an approval.",
+            groupId = ceoUser.groupId,
+            groupName = ceoUser.groupName,
+            employeeId = ceoUser.employeeId,
+            designation = ceoUser.designation,
+            avatarInitials = ceoUser.avatarInitials
           )
         )
       }
@@ -1294,7 +1591,12 @@ class LeaveDeskRepository {
               title = "${emp.name} (${emp.designation})",
               subtitle = "Team Member • Approval queries & direct chat",
               role = UserRole.EMPLOYEE,
-              targetUserId = emp.id
+              targetUserId = emp.id,
+              groupId = emp.groupId,
+              groupName = emp.groupName,
+              employeeId = emp.employeeId,
+              designation = emp.designation,
+              avatarInitials = emp.avatarInitials
             )
           )
         }
@@ -1308,7 +1610,12 @@ class LeaveDeskRepository {
             title = "Executive: ${ceoUser.name} (CEO)",
             subtitle = "Leadership escalation channel",
             role = UserRole.CEO,
-            targetUserId = ceoUser.id
+            targetUserId = ceoUser.id,
+            groupId = ceoUser.groupId,
+            groupName = ceoUser.groupName,
+            employeeId = ceoUser.employeeId,
+            designation = ceoUser.designation,
+            avatarInitials = ceoUser.avatarInitials
           )
         )
       }
@@ -1321,11 +1628,16 @@ class LeaveDeskRepository {
           threads.add(
             ChatThreadInfo(
               threadId = "thread_emp_${emp.id}_ceo",
-              title = "${emp.name} (${emp.groupName})",
+              title = "${emp.name} (${emp.designation})",
               subtitle = if (reqForEmp != null) "Query Active on ${reqForEmp.id} (${reqForEmp.leaveType.code})" else "Direct Employee Query Thread",
               role = UserRole.EMPLOYEE,
               targetUserId = emp.id,
-              relatedRequestId = reqForEmp?.id
+              relatedRequestId = reqForEmp?.id,
+              groupId = emp.groupId,
+              groupName = emp.groupName,
+              employeeId = emp.employeeId,
+              designation = emp.designation,
+              avatarInitials = emp.avatarInitials
             )
           )
         }
@@ -1339,7 +1651,12 @@ class LeaveDeskRepository {
               title = "Lead: ${tl.name} (${tl.groupName})",
               subtitle = "Management alignment & team leaves",
               role = UserRole.TEAM_LEAD,
-              targetUserId = tl.id
+              targetUserId = tl.id,
+              groupId = tl.groupId,
+              groupName = tl.groupName,
+              employeeId = tl.employeeId,
+              designation = tl.designation,
+              avatarInitials = tl.avatarInitials
             )
           )
         }

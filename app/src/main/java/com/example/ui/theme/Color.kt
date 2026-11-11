@@ -34,6 +34,10 @@ val StatusRejectedRed = Color(0xFFB85450)
 val StatusRejectedBg = Color(0xFFF8CECC)
 val StatusRejectedText = Color(0xFF992222)
 
+val StatusQueryAmber = Color(0xFFD97706)
+val StatusQueryAmberLight = Color(0xFFFEF3C7)
+val StatusQueryAmberText = Color(0xFF92400E)
+
 val StatusNotesBg = Color(0xFFFFFBE6)
 
 // Text

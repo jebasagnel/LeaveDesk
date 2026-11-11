@@ -68,4 +68,30 @@ class ExampleUnitTest {
     val unlocked = repo.ceoToggleDateLock(ceo, testDate)
     assertFalse("Date should now be unlocked", unlocked)
   }
+
+  @Test
+  fun testAvailableChatThreadsContainDirectoryMetadata() {
+    val repo = LeaveDeskRepository()
+    val ceo = LeaveDeskRepository.DEMO_USERS.first { it.role == UserRole.CEO }
+    val threads = repo.getAvailableChatThreads(ceo)
+
+    assertTrue("CEO should have multiple threads for employees and TLs", threads.size >= 5)
+    val empThread = threads.find { it.role == UserRole.EMPLOYEE }
+    assertNotNull("Should have employee thread", empThread)
+    assertNotNull("Should have employeeId in directory metadata", empThread?.employeeId)
+    assertNotNull("Should have designation in directory metadata", empThread?.designation)
+    assertNotNull("Should have groupId in directory metadata", empThread?.groupId)
+  }
+
+  @Test
+  fun testEmployeeCannotInitiallyMessageCeoWithoutQuery() {
+    val repo = LeaveDeskRepository()
+    // Maya Lin (u_emp6) has no queries from CEO, so direct CEO line is strictly locked
+    val canChat = repo.canEmployeeChatWithCeo("u_emp6")
+    assertFalse("Employee without active query cannot initiate contact with CEO", canChat)
+
+    // Alex Chen (u_emp1) has an active CEO query on LR-89102, so communication is unlocked
+    val canAlexChat = repo.canEmployeeChatWithCeo("u_emp1")
+    assertTrue("Employee with CEO query can reply and share proofs in chat", canAlexChat)
+  }
 }

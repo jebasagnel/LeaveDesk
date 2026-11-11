@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -362,6 +363,7 @@ private fun LegendDot(label: String, color: Color) {
   }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun QuickChatScreen(
   repository: LeaveDeskRepository,
@@ -370,6 +372,10 @@ fun QuickChatScreen(
 ) {
   val currentUser by repository.currentUser.collectAsState()
   val allMessages by repository.chatMessages.collectAsState()
+  val allUsers by repository.users.collectAsState()
+  val allGroups by repository.groups.collectAsState()
+  val allRequests by repository.leaveRequests.collectAsState()
+
   val availableThreads = remember(currentUser, allMessages) {
     repository.getAvailableChatThreads(currentUser)
   }
@@ -386,6 +392,34 @@ fun QuickChatScreen(
   var attachedProof by remember { mutableStateOf<LeaveProof?>(null) }
   var showAttachmentDialog by remember { mutableStateOf(false) }
   var viewingAttachment by remember { mutableStateOf<LeaveProof?>(null) }
+
+  // Intelligent Slide Filter & Directory States
+  var showDirectoryFilter by remember { mutableStateOf(false) }
+  var directorySearchQuery by remember { mutableStateOf("") }
+  var expandedGroupIds by remember { mutableStateOf(setOf("g_eng", "g_ops", "g_exec")) }
+  val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+  fun selectDirectoryUser(targetUser: User) {
+    val match = availableThreads.find { it.targetUserId == targetUser.id }
+    if (match != null) {
+      selectedThreadId = match.threadId
+    } else {
+      val computedId = when (currentUser.role) {
+        UserRole.CEO -> {
+          if (targetUser.role == UserRole.TEAM_LEAD) "thread_tl_${targetUser.id}_ceo"
+          else "thread_emp_${targetUser.id}_ceo"
+        }
+        UserRole.TEAM_LEAD -> "thread_emp_${targetUser.id}_tl"
+        UserRole.EMPLOYEE -> {
+          if (targetUser.role == UserRole.CEO) "thread_emp_${currentUser.id}_ceo"
+          else "thread_emp_${currentUser.id}_tl"
+        }
+      }
+      selectedThreadId = computedId
+    }
+    showDirectoryFilter = false
+    directorySearchQuery = ""
+  }
 
   // Mobile Gallery Photo Picker Launcher
   val galleryLauncher = rememberLauncherForActivityResult(
@@ -608,18 +642,41 @@ fun QuickChatScreen(
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically
     ) {
-      Text("Corporate Chat & Queries", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-      Surface(
-        shape = RoundedCornerShape(6.dp),
-        color = LocalRoleTheme.current.lightTint
-      ) {
-        Text(
-          text = currentUser.role.displayName,
-          fontSize = 11.sp,
-          fontWeight = FontWeight.Bold,
-          color = LocalRoleTheme.current.accent,
-          modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-        )
+      Column {
+        Text("Corporate Chat & Queries", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+        Text("Live approvals, query proofs & team directory", fontSize = 11.sp, color = TextSecondary)
+      }
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Surface(
+          shape = RoundedCornerShape(6.dp),
+          color = LocalRoleTheme.current.lightTint
+        ) {
+          Text(
+            text = currentUser.role.displayName,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = LocalRoleTheme.current.accent,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+          )
+        }
+
+        // Corner Intelligent Slide Filter Button (CEO and TL only - Employees do not need a filter)
+        if (currentUser.role != UserRole.EMPLOYEE) {
+          FilledTonalButton(
+            onClick = { showDirectoryFilter = true },
+            shape = RoundedCornerShape(8.dp),
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+            colors = ButtonDefaults.filledTonalButtonColors(
+              containerColor = LocalRoleTheme.current.accent,
+              contentColor = Color.White
+            ),
+            modifier = Modifier.testTag("chat_slide_filter_corner_btn")
+          ) {
+            Icon(Icons.Default.Tune, contentDescription = "Slide Filter", modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text(if (currentUser.role == UserRole.TEAM_LEAD) "Team Filter" else "Directory", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+          }
+        }
       }
     }
 
@@ -630,6 +687,29 @@ fun QuickChatScreen(
         .horizontalScroll(rememberScrollState()),
       horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+      // First Chip: Quick Search & Directory Trigger (CEO and TL only)
+      if (currentUser.role != UserRole.EMPLOYEE) {
+        FilterChip(
+          selected = showDirectoryFilter,
+          onClick = { showDirectoryFilter = true },
+          leadingIcon = {
+            Icon(Icons.Default.Search, contentDescription = "Search Directory", modifier = Modifier.size(14.dp), tint = LocalRoleTheme.current.accent)
+          },
+          label = {
+            Text(
+              if (currentUser.role == UserRole.TEAM_LEAD) "Filter Team ▾" else "Search & Groups ▾",
+              fontSize = 11.sp,
+              fontWeight = FontWeight.Bold,
+              color = LocalRoleTheme.current.accent
+            )
+          },
+          colors = FilterChipDefaults.filterChipColors(
+            containerColor = LocalRoleTheme.current.lightTint
+          ),
+          modifier = Modifier.testTag("chat_search_groups_chip")
+        )
+      }
+
       availableThreads.forEach { thread ->
         val isSelected = selectedThreadId == thread.threadId
         FilterChip(
@@ -673,21 +753,42 @@ fun QuickChatScreen(
             Text(activeThread.title, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
             activeThread.role?.let { RoleBadge(it) }
           }
+          val metaInfo = listOfNotNull(
+            activeThread.groupName?.takeIf { it.isNotBlank() },
+            activeThread.designation?.takeIf { it.isNotBlank() }
+          ).joinToString(" • ")
+          if (metaInfo.isNotBlank()) {
+            Text(metaInfo, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = LocalRoleTheme.current.accent)
+          }
           Text(activeThread.subtitle, fontSize = 11.sp, color = TextSecondary)
         }
 
-        if (activeThread.isLocked) {
-          Surface(
-            shape = RoundedCornerShape(6.dp),
-            color = StatusRejectedBg
-          ) {
-            Text(
-              text = "Locked",
-              fontSize = 10.sp,
-              fontWeight = FontWeight.Bold,
-              color = StatusRejectedRed,
-              modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-            )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+          if (activeThread.isLocked) {
+            Surface(
+              shape = RoundedCornerShape(6.dp),
+              color = StatusRejectedBg
+            ) {
+              Text(
+                text = "Locked",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = StatusRejectedRed,
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+              )
+            }
+          }
+          if (currentUser.role != UserRole.EMPLOYEE) {
+            OutlinedButton(
+              onClick = { showDirectoryFilter = true },
+              shape = RoundedCornerShape(6.dp),
+              contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+              modifier = Modifier.height(30.dp)
+            ) {
+              Icon(Icons.Default.SwapHoriz, contentDescription = null, modifier = Modifier.size(14.dp))
+              Spacer(Modifier.width(2.dp))
+              Text("Switch", fontSize = 10.sp)
+            }
           }
         }
       }
@@ -938,6 +1039,362 @@ fun QuickChatScreen(
       }
     }
   }
+
+  // Intelligent Slide Filter & Directory Hierarchy Modal
+  if (showDirectoryFilter) {
+    ModalBottomSheet(
+      onDismissRequest = {
+        showDirectoryFilter = false
+        directorySearchQuery = ""
+      },
+      sheetState = sheetState,
+      containerColor = Color(0xFFF8FAFC),
+      dragHandle = { BottomSheetDefaults.DragHandle() },
+      modifier = Modifier.testTag("chat_slide_filter_modal")
+    ) {
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 18.dp, vertical = 6.dp)
+          .heightIn(max = 620.dp)
+      ) {
+        // Title & Close Row
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+              modifier = Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(LocalRoleTheme.current.lightTint),
+              contentAlignment = Alignment.Center
+            ) {
+              Icon(Icons.Default.AccountTree, contentDescription = null, tint = LocalRoleTheme.current.accent, modifier = Modifier.size(20.dp))
+            }
+            Column {
+              Text("Intelligent Directory & Hierarchy", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+              Text("Slide filter • Live search or group hierarchy", fontSize = 11.sp, color = TextSecondary)
+            }
+          }
+          IconButton(onClick = {
+            showDirectoryFilter = false
+            directorySearchQuery = ""
+          }) {
+            Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary)
+          }
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        // Search Input
+        OutlinedTextField(
+          value = directorySearchQuery,
+          onValueChange = { directorySearchQuery = it },
+          placeholder = { Text("Search by name, ID, title, or character (e.g. 'A', 'David', 'Eng')...", fontSize = 12.sp) },
+          leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = LocalRoleTheme.current.accent) },
+          trailingIcon = {
+            if (directorySearchQuery.isNotEmpty()) {
+              IconButton(onClick = { directorySearchQuery = "" }) {
+                Icon(Icons.Default.Clear, contentDescription = "Clear", tint = TextSecondary)
+              }
+            }
+          },
+          singleLine = true,
+          shape = RoundedCornerShape(12.dp),
+          colors = OutlinedTextFieldDefaults.colors(
+            focusedContainerColor = Color.White,
+            unfocusedContainerColor = Color.White,
+            focusedBorderColor = LocalRoleTheme.current.accent,
+            unfocusedBorderColor = CardBorder
+          ),
+          modifier = Modifier
+            .fillMaxWidth()
+            .testTag("directory_search_input")
+        )
+
+        Spacer(Modifier.height(10.dp))
+
+        LazyColumn(
+          modifier = Modifier.weight(1f),
+          verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+          // Scope candidate users based on role
+          // CEO: all employees & TLs across company
+          // Team Lead: ONLY their own team members and the CEO
+          val scopeCandidateUsers = when (currentUser.role) {
+            UserRole.CEO -> allUsers.filter { it.id != currentUser.id }
+            UserRole.TEAM_LEAD -> allUsers.filter {
+              (it.groupId == currentUser.groupId && it.role == UserRole.EMPLOYEE) || it.role == UserRole.CEO
+            }
+            UserRole.EMPLOYEE -> emptyList()
+          }
+
+          val scopeCandidateGroups = when (currentUser.role) {
+            UserRole.CEO -> allGroups
+            UserRole.TEAM_LEAD -> allGroups.filter { it.id == currentUser.groupId }
+            UserRole.EMPLOYEE -> emptyList()
+          }
+
+          // If search query is entered, show matched employees and TLs
+          if (directorySearchQuery.isNotBlank()) {
+            val query = directorySearchQuery.trim().lowercase()
+            val matchedUsers = scopeCandidateUsers.filter {
+              it.name.lowercase().contains(query) ||
+              it.designation.lowercase().contains(query) ||
+              it.employeeId.lowercase().contains(query) ||
+              it.groupName.lowercase().contains(query) ||
+              it.role.displayName.lowercase().contains(query)
+            }
+
+            item {
+              Text(
+                text = "SEARCH RESULTS (${matchedUsers.size})",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextMuted
+              )
+            }
+
+            if (matchedUsers.isEmpty()) {
+              item {
+                Box(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                  contentAlignment = Alignment.Center
+                ) {
+                  Text(
+                    text = if (currentUser.role == UserRole.TEAM_LEAD) "No team members match '$directorySearchQuery'" else "No employees or TLs match '$directorySearchQuery'",
+                    fontSize = 12.sp,
+                    color = TextMuted
+                  )
+                }
+              }
+            } else {
+              items(matchedUsers, key = { it.id }) { user ->
+                val userHasActiveQuery = allRequests.any {
+                  it.userId == user.id && (it.status == LeaveStatus.QUERY || it.ceoStep?.decision == LeaveStatus.QUERY)
+                }
+                val pendingLeavesCount = allRequests.count {
+                  it.userId == user.id && it.status == LeaveStatus.PENDING
+                }
+
+                DirectoryUserCard(
+                  user = user,
+                  hasActiveQuery = userHasActiveQuery,
+                  pendingCount = pendingLeavesCount,
+                  onClick = { selectDirectoryUser(user) }
+                )
+              }
+            }
+          } else {
+            // Default: Department hierarchy tree view!
+            item {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Text(
+                  text = if (currentUser.role == UserRole.TEAM_LEAD) "MY TEAM DIRECTORY" else "DEPARTMENT HIERARCHY TREE",
+                  fontSize = 11.sp,
+                  fontWeight = FontWeight.Bold,
+                  color = TextMuted
+                )
+                Text(
+                  text = if (currentUser.role == UserRole.TEAM_LEAD) "Select team member to chat" else "Click group to expand TL & members",
+                  fontSize = 10.sp,
+                  color = TextSecondary
+                )
+              }
+            }
+
+            // Group tree cards
+            items(scopeCandidateGroups, key = { it.id }) { group ->
+              val isExpanded = expandedGroupIds.contains(group.id)
+              val groupTl = allUsers.find { it.id == group.tlUserId }
+              val groupEmployees = allUsers.filter { it.groupId == group.id && it.role == UserRole.EMPLOYEE }
+              val groupPendingCount = allRequests.count {
+                it.groupId == group.id && it.status == LeaveStatus.PENDING
+              }
+              val groupQueryCount = allRequests.count {
+                it.groupId == group.id && (it.status == LeaveStatus.QUERY || it.ceoStep?.decision == LeaveStatus.QUERY)
+              }
+
+              Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                border = BorderStroke(1.dp, if (isExpanded) LocalRoleTheme.current.accent.copy(alpha = 0.5f) else CardBorder),
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                  // Group Header Clickable Row
+                  Row(
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .clip(RoundedCornerShape(8.dp))
+                      .clickable {
+                        expandedGroupIds = if (isExpanded) {
+                          expandedGroupIds - group.id
+                        } else {
+                          expandedGroupIds + group.id
+                        }
+                      }
+                      .padding(4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                      Box(
+                        modifier = Modifier
+                          .size(32.dp)
+                          .clip(CircleShape)
+                          .background(if (group.id == "g_exec") CeoPurpleLight else if (group.id == "g_eng") EmployeeTealLight else TeamLeadIndigoLight),
+                        contentAlignment = Alignment.Center
+                      ) {
+                        Icon(
+                          imageVector = if (group.id == "g_exec") Icons.Default.CorporateFare else Icons.Default.AccountTree,
+                          contentDescription = null,
+                          tint = if (group.id == "g_exec") CeoPurple else if (group.id == "g_eng") EmployeeTeal else TeamLeadIndigo,
+                          modifier = Modifier.size(18.dp)
+                        )
+                      }
+                      Column {
+                        Text(group.name, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                        Text("${groupEmployees.size + (if (groupTl != null) 1 else 0)} Members • Min attendance: ${group.minPresentThreshold}", fontSize = 10.sp, color = TextSecondary)
+                      }
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                      if (groupQueryCount > 0) {
+                        Surface(
+                          shape = RoundedCornerShape(4.dp),
+                          color = StatusQueryAmberLight
+                        ) {
+                          Text("$groupQueryCount Query", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = StatusQueryAmber, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+                        }
+                      } else if (groupPendingCount > 0) {
+                        Surface(
+                          shape = RoundedCornerShape(4.dp),
+                          color = NeutralSurface
+                        ) {
+                          Text("$groupPendingCount Pending", fontSize = 9.sp, fontWeight = FontWeight.SemiBold, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+                        }
+                      }
+                      Icon(
+                        imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (isExpanded) "Collapse" else "Expand",
+                        tint = TextSecondary
+                      )
+                    }
+                  }
+
+                  // Animated Expanded Hierarchy
+                  AnimatedVisibility(visible = isExpanded) {
+                    Column(
+                      modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, top = 4.dp),
+                      verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                      // 1. PINNED TEAM LEAD AT TOP
+                      if (groupTl != null) {
+                        Text("👑 TEAM LEAD (PINNED)", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TeamLeadIndigo)
+                        Surface(
+                          shape = RoundedCornerShape(10.dp),
+                          color = TeamLeadIndigoLight.copy(alpha = 0.6f),
+                          border = BorderStroke(1.dp, TeamLeadIndigo.copy(alpha = 0.4f)),
+                          modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectDirectoryUser(groupTl) }
+                        ) {
+                          Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                          ) {
+                            Box(
+                              modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(TeamLeadIndigo),
+                              contentAlignment = Alignment.Center
+                            ) {
+                              Text(groupTl.avatarInitials, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                              Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(groupTl.name, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                                Surface(
+                                  shape = RoundedCornerShape(4.dp),
+                                  color = TeamLeadIndigo
+                                ) {
+                                  Text("TL", fontSize = 9.sp, color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                                }
+                              }
+                              Text("${groupTl.designation} • ${groupTl.employeeId}", fontSize = 10.sp, color = TextSecondary)
+                            }
+                            Icon(Icons.Default.Chat, contentDescription = "Chat", tint = TeamLeadIndigo, modifier = Modifier.size(18.dp))
+                          }
+                        }
+                      }
+
+                      // 2. EMPLOYEES LISTED UNDERNEATH
+                      if (groupEmployees.isNotEmpty()) {
+                        Text("TEAM MEMBERS", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextMuted)
+                        groupEmployees.forEach { emp ->
+                          val hasQuery = allRequests.any {
+                            it.userId == emp.id && (it.status == LeaveStatus.QUERY || it.ceoStep?.decision == LeaveStatus.QUERY)
+                          }
+                          Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (hasQuery) StatusQueryAmberLight.copy(alpha = 0.5f) else NeutralSurface,
+                            border = BorderStroke(1.dp, if (hasQuery) StatusQueryAmber.copy(alpha = 0.4f) else CardBorder),
+                            modifier = Modifier
+                              .fillMaxWidth()
+                              .clickable { selectDirectoryUser(emp) }
+                          ) {
+                            Row(
+                              modifier = Modifier.padding(8.dp),
+                              verticalAlignment = Alignment.CenterVertically,
+                              horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                              Box(
+                                modifier = Modifier
+                                  .size(30.dp)
+                                  .clip(CircleShape)
+                                  .background(EmployeeTeal),
+                                contentAlignment = Alignment.Center
+                              ) {
+                                Text(emp.avatarInitials, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                              }
+                              Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                  Text(emp.name, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                                  if (hasQuery) {
+                                    Text("⚠️ Query Pending", fontSize = 9.sp, color = StatusQueryAmber, fontWeight = FontWeight.Bold)
+                                  }
+                                }
+                                Text("${emp.designation} • ${emp.employeeId}", fontSize = 10.sp, color = TextSecondary)
+                              }
+                              Icon(Icons.Default.Chat, contentDescription = "Chat", tint = EmployeeTeal, modifier = Modifier.size(16.dp))
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 @Composable
@@ -1049,6 +1506,63 @@ fun NotificationsScreen(
           }
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun DirectoryUserCard(
+  user: User,
+  hasActiveQuery: Boolean,
+  pendingCount: Int,
+  onClick: () -> Unit
+) {
+  val avatarBg = when (user.role) {
+    UserRole.CEO -> CeoPurple
+    UserRole.TEAM_LEAD -> TeamLeadIndigo
+    UserRole.EMPLOYEE -> EmployeeTeal
+  }
+
+  Surface(
+    shape = RoundedCornerShape(10.dp),
+    color = if (hasActiveQuery) StatusQueryAmberLight.copy(alpha = 0.5f) else Color.White,
+    border = BorderStroke(1.dp, if (hasActiveQuery) StatusQueryAmber.copy(alpha = 0.6f) else CardBorder),
+    modifier = Modifier
+      .fillMaxWidth()
+      .clickable(onClick = onClick)
+  ) {
+    Row(
+      modifier = Modifier.padding(10.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+      Box(
+        modifier = Modifier
+          .size(36.dp)
+          .clip(CircleShape)
+          .background(avatarBg),
+        contentAlignment = Alignment.Center
+      ) {
+        Text(user.avatarInitials, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+      }
+
+      Column(modifier = Modifier.weight(1f)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+          Text(user.name, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+          RoleBadge(user.role)
+          if (hasActiveQuery) {
+            Surface(
+              shape = RoundedCornerShape(4.dp),
+              color = StatusQueryAmberLight
+            ) {
+              Text("⚠️ Query", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = StatusQueryAmber, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+            }
+          }
+        }
+        Text("${user.designation} • ${user.groupName} (${user.employeeId})", fontSize = 11.sp, color = TextSecondary)
+      }
+
+      Icon(Icons.Default.Chat, contentDescription = "Open Chat", tint = avatarBg, modifier = Modifier.size(18.dp))
     }
   }
 }

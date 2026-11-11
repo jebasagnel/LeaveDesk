@@ -1,7 +1,15 @@
 /**
- * LeaveDesk MySQL Database Adapter
- * Powered by mysql2/promise for connection pooling and prepared statements.
- * Features automated schema provisioning and initial role seeding (CEO001, TL201, EMP101).
+ * LeaveDesk Production MySQL Database Adapter
+ * Powered by mysql2/promise with connection pooling and prepared statements.
+ * Features automated schema provisioning for:
+ * 1. users
+ * 2. user_quotas
+ * 3. leave_requests
+ * 4. holidays
+ * 5. activity_logs
+ * 6. audit_logs
+ * 7. chat_messages
+ * 8. teams
  */
 
 require('dotenv').config();
@@ -14,8 +22,8 @@ class MySQLDatabase {
     this.config = {
       host: process.env.MYSQL_HOST || 'localhost',
       port: parseInt(process.env.MYSQL_PORT || '3306', 10),
-      user: process.env.MYSQL_USER || 'root',
-      password: process.env.MYSQL_PASSWORD || '',
+      user: process.env.MYSQL_USER || 'leavedesk_app',
+      password: process.env.MYSQL_PASSWORD || '4235',
       database: process.env.MYSQL_DATABASE || 'leavedesk_db',
       waitForConnections: true,
       connectionLimit: 10,
@@ -29,41 +37,31 @@ class MySQLDatabase {
 
   async initMySQL() {
     try {
-      // 1. Test preliminary connection to server to ensure database exists
-      const testConn = await mysql.createConnection({
-        host: this.config.host,
-        port: this.config.port,
-        user: this.config.user,
-        password: this.config.password
-      });
-
-      await testConn.query(`CREATE DATABASE IF NOT EXISTS \`${this.config.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-      await testConn.end();
-
-      // 2. Initialize connection pool targeting leavedesk_db
+      // 1. Initialize connection pool directly with configured credentials
       this.pool = mysql.createPool(this.config);
       await this.pool.query('SELECT 1');
       this.connected = true;
-      console.log(`🐬 [MySQL] Successfully connected to database '${this.config.database}' at ${this.config.host}:${this.config.port}`);
+      console.log(`🐬 [MySQL] Successfully connected to database '${this.config.database}' at ${this.config.host}:${this.config.port} (User: ${this.config.user})`);
 
-      // 3. Ensure tables exist
+      // 2. Ensure all 8 production tables exist
       await this.migrateTables();
 
-      // 4. Ensure seed data exists
+      // 3. Ensure seed data exists
       await this.seedInitialData();
 
       return true;
     } catch (err) {
       this.connected = false;
-      console.log(`⚠️  [MySQL] Connection check: ${err.message}`);
-      console.log(`ℹ️  [MySQL] Operating in resilient fallback mode (in-memory state active). When MySQL is available, services auto-sync.`);
+      console.error(`❌ [MySQL] Fatal Connection Error: ${err.message}`);
+      console.log(`ℹ️ [MySQL] Please verify that MySQL is running on ${this.config.host}:${this.config.port} and user '${this.config.user}' exists with database '${this.config.database}'.`);
       return false;
     }
   }
 
   async migrateTables() {
-    if (!this.pool) return;
+    if (!this.pool) throw new Error("Database pool not initialized");
 
+    // 1. TEAMS TABLE
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS teams (
         id VARCHAR(64) PRIMARY KEY,
@@ -75,6 +73,7 @@ class MySQLDatabase {
       ) ENGINE=InnoDB;
     `);
 
+    // 2. USERS TABLE
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id VARCHAR(64) PRIMARY KEY,
@@ -89,10 +88,12 @@ class MySQLDatabase {
         avatar_initials VARCHAR(4),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_users_empid (employee_id),
-        INDEX idx_users_email (email)
+        INDEX idx_users_email (email),
+        INDEX idx_users_group (group_id)
       ) ENGINE=InnoDB;
     `);
 
+    // 3. USER LEAVE QUOTAS TABLE
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS user_quotas (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -106,6 +107,7 @@ class MySQLDatabase {
       ) ENGINE=InnoDB;
     `);
 
+    // 4. HOLIDAYS & CEO LOCKS TABLE
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS holidays (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -113,10 +115,12 @@ class MySQLDatabase {
         title VARCHAR(128) NOT NULL,
         is_locked_by_ceo BOOLEAN NOT NULL DEFAULT FALSE,
         lock_reason VARCHAR(255),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_holiday_date (date)
       ) ENGINE=InnoDB;
     `);
 
+    // 5. LEAVE REQUESTS TABLE
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS leave_requests (
         id VARCHAR(64) PRIMARY KEY,
@@ -144,10 +148,35 @@ class MySQLDatabase {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_req_user (user_id),
         INDEX idx_req_group (group_id),
-        INDEX idx_req_status (status)
+        INDEX idx_req_status (status),
+        INDEX idx_req_dates (start_date, end_date)
       ) ENGINE=InnoDB;
     `);
 
+    // 6. REQUEST ACTIVITY LOGS TABLE (Automated middleware writes here)
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS activity_logs (
+        id CHAR(36) PRIMARY KEY,
+        request_id CHAR(36) UNIQUE,
+        service VARCHAR(64) NOT NULL,
+        actor_user_id VARCHAR(64),
+        actor_role VARCHAR(32),
+        action VARCHAR(64) NOT NULL,
+        resource_type VARCHAR(64) NOT NULL,
+        outcome ENUM('SUCCESS', 'FAILURE') NOT NULL,
+        http_method VARCHAR(10) NOT NULL,
+        route VARCHAR(255) NOT NULL,
+        status_code SMALLINT NOT NULL,
+        duration_ms INT NOT NULL,
+        details JSON,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_act_created (created_at),
+        INDEX idx_act_actor (actor_user_id),
+        INDEX idx_act_action (action)
+      ) ENGINE=InnoDB;
+    `);
+
+    // 7. BUSINESS AUDIT LOGS TABLE (Logins, approvals, locks, cancellations)
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS audit_logs (
         id VARCHAR(64) PRIMARY KEY,
@@ -157,10 +186,13 @@ class MySQLDatabase {
         action VARCHAR(64) NOT NULL,
         target VARCHAR(128) NOT NULL,
         reason TEXT,
-        details TEXT
+        details TEXT,
+        INDEX idx_audit_timestamp (timestamp),
+        INDEX idx_audit_action (action)
       ) ENGINE=InnoDB;
     `);
 
+    // 8. CHAT MESSAGES TABLE
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS chat_messages (
         id VARCHAR(64) PRIMARY KEY,
@@ -170,9 +202,12 @@ class MySQLDatabase {
         message TEXT NOT NULL,
         thread_id VARCHAR(64) NOT NULL DEFAULT 'general',
         related_request_id VARCHAR(64) NULL,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_chat_thread (thread_id)
       ) ENGINE=InnoDB;
     `);
+
+    console.log('✅ [MySQL] All 8 tables migrated and verified.');
   }
 
   async seedInitialData() {
@@ -223,20 +258,7 @@ class MySQLDatabase {
       ('2026-11-26', 'Thanksgiving Day', TRUE, 'Company-Wide Thanksgiving Holiday'),
       ('2026-11-27', 'Day After Thanksgiving', TRUE, 'Extended Holiday'),
       ('2026-12-25', 'Christmas Day', TRUE, 'Christmas Holiday'),
-      ('2027-01-01', 'New Year\'s Day', TRUE, 'New Year Celebration');
-    `);
-
-    // Initial Leave Request
-    await this.pool.query(`
-      INSERT INTO leave_requests (
-        id, user_id, user_name, user_role, group_id, group_name,
-        leave_type, start_date, end_date, working_days, is_half_day,
-        reason, backup_user_id, backup_user_name, status
-      ) VALUES (
-        'LR-7892', 'u_emp1', 'Alex Chen', 'EMPLOYEE', 'g_eng', 'Engineering & Product',
-        'CL', '2026-11-16', '2026-11-17', 2, FALSE,
-        'Personal family commitment and travel out of town.', 'u_emp2', 'Sarah Jenkins', 'PENDING'
-      );
+      ('2027-01-01', 'New Year\\'s Day', TRUE, 'New Year Celebration');
     `);
 
     // Initial Audit Log
@@ -248,10 +270,10 @@ class MySQLDatabase {
     console.log('✅ [MySQL] Initial seed completed successfully.');
   }
 
-  // --- QUERY APIS ---
+  // --- QUERY & WRITE OPERATIONS (STRICT PARAMETERIZED SQL) ---
 
   async findUserByIdentifier(identifier) {
-    if (!this.connected) return null;
+    if (!this.pool) throw new Error("Database pool is not active");
     const clean = identifier.trim().toLowerCase();
     const [rows] = await this.pool.query(
       `SELECT id, employee_id as employeeId, name, email, password_hash as password, role,
@@ -263,7 +285,7 @@ class MySQLDatabase {
   }
 
   async getUser(id) {
-    if (!this.connected) return null;
+    if (!this.pool) throw new Error("Database pool is not active");
     const [rows] = await this.pool.query(
       `SELECT id, employee_id as employeeId, name, email, password_hash as password, role,
               group_id as groupId, group_name as groupName, designation, avatar_initials as avatarInitials
@@ -274,7 +296,7 @@ class MySQLDatabase {
   }
 
   async getAllUsers() {
-    if (!this.connected) return [];
+    if (!this.pool) throw new Error("Database pool is not active");
     const [rows] = await this.pool.query(
       `SELECT id, employee_id as employeeId, name, email, role,
               group_id as groupId, group_name as groupName, designation, avatar_initials as avatarInitials
@@ -284,7 +306,7 @@ class MySQLDatabase {
   }
 
   async getTeamMembers(groupId) {
-    if (!this.connected) return [];
+    if (!this.pool) throw new Error("Database pool is not active");
     const [rows] = await this.pool.query(
       `SELECT id, employee_id as employeeId, name, email, role,
               group_id as groupId, group_name as groupName, designation, avatar_initials as avatarInitials
@@ -295,7 +317,7 @@ class MySQLDatabase {
   }
 
   async getGroup(id) {
-    if (!this.connected) return null;
+    if (!this.pool) throw new Error("Database pool is not active");
     const [teams] = await this.pool.query(`SELECT * FROM teams WHERE id = ? LIMIT 1`, [id]);
     if (!teams[0]) return null;
     const [members] = await this.pool.query(`SELECT id FROM users WHERE group_id = ?`, [id]);
@@ -310,7 +332,7 @@ class MySQLDatabase {
   }
 
   async getQuotas(userId) {
-    if (!this.connected) return [];
+    if (!this.pool) throw new Error("Database pool is not active");
     const [rows] = await this.pool.query(
       `SELECT leave_type as leaveType, total_quota as total, used_quota as used, is_no_cap as isNoCap
        FROM user_quotas WHERE user_id = ?`,
@@ -320,7 +342,7 @@ class MySQLDatabase {
   }
 
   async deductQuota(userId, leaveType, days) {
-    if (!this.connected) return;
+    if (!this.pool) throw new Error("Database pool is not active");
     await this.pool.query(
       `UPDATE user_quotas SET used_quota = used_quota + ? WHERE user_id = ? AND leave_type = ? AND is_no_cap = FALSE`,
       [days, userId, leaveType]
@@ -328,7 +350,7 @@ class MySQLDatabase {
   }
 
   async restoreQuota(userId, leaveType, days) {
-    if (!this.connected) return;
+    if (!this.pool) throw new Error("Database pool is not active");
     await this.pool.query(
       `UPDATE user_quotas SET used_quota = GREATEST(0, used_quota - ?) WHERE user_id = ? AND leave_type = ? AND is_no_cap = FALSE`,
       [days, userId, leaveType]
@@ -336,7 +358,7 @@ class MySQLDatabase {
   }
 
   async getLeaveRequests(filter = {}) {
-    if (!this.connected) return [];
+    if (!this.pool) throw new Error("Database pool is not active");
     let query = `
       SELECT id, user_id as userId, user_name as userName, user_role as userRole,
              group_id as groupId, group_name as groupName, leave_type as leaveType,
@@ -371,25 +393,30 @@ class MySQLDatabase {
   }
 
   async createLeaveRequest(data) {
-    if (!this.connected) return null;
-    await this.pool.query(
-      `INSERT INTO leave_requests (
-        id, user_id, user_name, user_role, group_id, group_name,
-        leave_type, start_date, end_date, working_days, is_half_day,
-        reason, backup_user_id, backup_user_name, backup_note, proof_file_name, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING')`,
-      [
-        data.id, data.userId, data.userName, data.userRole, data.groupId, data.groupName,
-        data.leaveType, data.startDate, data.endDate, data.workingDays, data.isHalfDay ? 1 : 0,
-        data.reason, data.backupUserId || null, data.backupUserName || null,
-        data.backupNote || null, data.proofFileName || null
-      ]
-    );
-    return data;
+    if (!this.pool) throw new Error("Database pool is not active");
+    try {
+      await this.pool.query(
+        `INSERT INTO leave_requests (
+          id, user_id, user_name, user_role, group_id, group_name,
+          leave_type, start_date, end_date, working_days, is_half_day,
+          reason, backup_user_id, backup_user_name, backup_note, proof_file_name, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING')`,
+        [
+          data.id, data.userId, data.userName || 'Employee', data.userRole || 'EMPLOYEE', data.groupId || 'g_eng', data.groupName || 'Engineering',
+          data.leaveType, data.startDate, data.endDate, data.workingDays, data.isHalfDay ? 1 : 0,
+          data.reason || 'General Leave', data.backupUserId || null, data.backupUserName || null,
+          data.backupNote || null, data.proofFileName || null
+        ]
+      );
+      return data;
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in createLeaveRequest]:", sqlErr.message, "Data payload:", data);
+      throw sqlErr;
+    }
   }
 
   async updateLeaveDecision(id, updateData) {
-    if (!this.connected) return null;
+    if (!this.pool) throw new Error("Database pool is not active");
     const fields = [];
     const values = [];
 
@@ -401,70 +428,164 @@ class MySQLDatabase {
     if (updateData.cancellationReason) { fields.push('cancellation_reason = ?'); values.push(updateData.cancellationReason); }
 
     values.push(id);
-    await this.pool.query(`UPDATE leave_requests SET ${fields.join(', ')} WHERE id = ?`, values);
-    const [rows] = await this.pool.query(`SELECT * FROM leave_requests WHERE id = ?`, [id]);
-    return rows[0] || null;
+    try {
+      await this.pool.query(`UPDATE leave_requests SET ${fields.join(', ')} WHERE id = ?`, values);
+      const [rows] = await this.pool.query(`SELECT * FROM leave_requests WHERE id = ?`, [id]);
+      return rows[0] || null;
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in updateLeaveDecision]:", sqlErr.message, "Fields:", fields, "Values:", values);
+      throw sqlErr;
+    }
   }
 
   async getHolidays() {
-    if (!this.connected) return [];
-    const [rows] = await this.pool.query(`
-      SELECT id, DATE_FORMAT(date, '%Y-%m-%d') as date, title,
-             is_locked_by_ceo as isLockedByCeo, lock_reason as lockReason
-      FROM holidays ORDER BY date ASC
-    `);
-    return rows;
+    if (!this.pool) throw new Error("Database pool is not active");
+    try {
+      const [rows] = await this.pool.query(`
+        SELECT id, DATE_FORMAT(date, '%Y-%m-%d') as date, title,
+               is_locked_by_ceo as isLockedByCeo, lock_reason as lockReason
+        FROM holidays ORDER BY date ASC
+      `);
+      return rows;
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in getHolidays]:", sqlErr.message);
+      throw sqlErr;
+    }
   }
 
   async setHolidayLock(date, reason, isLocked) {
-    if (!this.connected) return null;
-    await this.pool.query(`
-      INSERT INTO holidays (date, title, is_locked_by_ceo, lock_reason)
-      VALUES (?, ?, ?, ?)
-      ON DUPLICATE KEY UPDATE is_locked_by_ceo = VALUES(is_locked_by_ceo), lock_reason = VALUES(lock_reason)
-    `, [date, reason || 'Executive Lock', isLocked ? 1 : 0, isLocked ? (reason || 'Locked by CEO') : null]);
+    if (!this.pool) throw new Error("Database pool is not active");
+    try {
+      await this.pool.query(`
+        INSERT INTO holidays (date, title, is_locked_by_ceo, lock_reason)
+        VALUES (?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE is_locked_by_ceo = VALUES(is_locked_by_ceo), lock_reason = VALUES(lock_reason)
+      `, [date, reason || 'Executive Lock', isLocked ? 1 : 0, isLocked ? (reason || 'Locked by CEO') : null]);
 
-    const [rows] = await this.pool.query(`SELECT * FROM holidays WHERE date = ?`, [date]);
-    return rows[0] || null;
+      const [rows] = await this.pool.query(`SELECT * FROM holidays WHERE date = ?`, [date]);
+      return rows[0] || null;
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in setHolidayLock]:", sqlErr.message, "Date:", date);
+      throw sqlErr;
+    }
   }
 
   async getChatMessages(threadId = 'general') {
-    if (!this.connected) return [];
-    const [rows] = await this.pool.query(`
-      SELECT id, sender_id as senderId, sender_name as senderName, sender_role as senderRole,
-             message, thread_id as threadId, related_request_id as relatedRequestId, timestamp
-      FROM chat_messages WHERE thread_id = ? ORDER BY timestamp ASC
-    `, [threadId]);
-    return rows;
+    if (!this.pool) throw new Error("Database pool is not active");
+    try {
+      const [rows] = await this.pool.query(`
+        SELECT id, sender_id as senderId, sender_name as senderName, sender_role as senderRole,
+               message, thread_id as threadId, related_request_id as relatedRequestId, timestamp
+        FROM chat_messages WHERE thread_id = ? ORDER BY timestamp ASC
+      `, [threadId]);
+      return rows;
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in getChatMessages]:", sqlErr.message, "ThreadId:", threadId);
+      throw sqlErr;
+    }
   }
 
   async addChatMessage(msg) {
-    if (!this.connected) return null;
-    await this.pool.query(`
-      INSERT INTO chat_messages (id, sender_id, sender_name, sender_role, message, thread_id, related_request_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [msg.id, msg.senderId, msg.senderName, msg.senderRole, msg.message, msg.threadId || 'general', msg.relatedRequestId || null]);
-    return msg;
+    if (!this.pool) throw new Error("Database pool is not active");
+    try {
+      await this.pool.query(`
+        INSERT INTO chat_messages (id, sender_id, sender_name, sender_role, message, thread_id, related_request_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [
+        msg.id,
+        msg.senderId,
+        msg.senderName || 'Corporate User',
+        msg.senderRole || 'EMPLOYEE',
+        msg.message || msg.text || 'Message',
+        msg.threadId || 'general',
+        msg.relatedRequestId || null
+      ]);
+      return msg;
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in addChatMessage]:", sqlErr.message, "Payload:", msg);
+      throw sqlErr;
+    }
   }
 
+  // --- ACTIVITY LOGS (MIDDLEWARE WRITES) ---
+  async addActivityLog(data) {
+    if (!this.pool) throw new Error("Database pool is not active");
+    try {
+      await this.pool.query(`
+        INSERT INTO activity_logs (
+          id, request_id, service, actor_user_id, actor_role, action,
+          resource_type, outcome, http_method, route, status_code, duration_ms, details
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        data.id,
+        data.requestId,
+        data.service,
+        data.actorUserId || null,
+        data.actorRole || null,
+        data.action,
+        data.resourceType,
+        data.outcome,
+        data.httpMethod,
+        data.route,
+        data.statusCode,
+        data.durationMs,
+        typeof data.details === 'object' ? JSON.stringify(data.details) : data.details
+      ]);
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in addActivityLog]:", sqlErr.message);
+    }
+  }
+
+  async getActivityLogs() {
+    if (!this.pool) throw new Error("Database pool is not active");
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT 100`
+      );
+      return rows;
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in getActivityLogs]:", sqlErr.message);
+      throw sqlErr;
+    }
+  }
+
+  // --- AUDIT LOGS (BUSINESS OPERATIONS & LOGINS) ---
   async getAuditLogs() {
-    if (!this.connected) return [];
-    const [rows] = await this.pool.query(`
-      SELECT id, timestamp, actor_name as actorName, actor_role as actorRole,
-             action, target, reason, details
-      FROM audit_logs ORDER BY timestamp DESC LIMIT 100
-    `);
-    return rows;
+    if (!this.pool) throw new Error("Database pool is not active");
+    try {
+      const [rows] = await this.pool.query(`
+        SELECT id, timestamp, actor_name as actorName, actor_role as actorRole,
+               action, target, reason, details
+        FROM audit_logs ORDER BY timestamp DESC LIMIT 100
+      `);
+      return rows;
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in getAuditLogs]:", sqlErr.message);
+      throw sqlErr;
+    }
   }
 
   async addAudit(actorName, actorRole, action, target, reason, details) {
+    if (!this.pool) throw new Error("Database pool is not active");
     const id = "AUD-" + Math.random().toString(36).substring(2, 8).toUpperCase();
-    if (!this.connected) return { id, actorName, actorRole, action, target, reason, details };
-    await this.pool.query(`
-      INSERT INTO audit_logs (id, actor_name, actor_role, action, target, reason, details)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [id, actorName, actorRole, action, target, reason, details || '']);
-    return { id, timestamp: new Date().toISOString(), actorName, actorRole, action, target, reason, details };
+    try {
+      await this.pool.query(`
+        INSERT INTO audit_logs (id, actor_name, actor_role, action, target, reason, details)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [
+        id,
+        actorName || 'System',
+        actorRole || 'EMPLOYEE',
+        action || 'ACTION',
+        target || 'SYSTEM',
+        reason || 'Standard operation',
+        details || ''
+      ]);
+      return { id, timestamp: new Date().toISOString(), actorName, actorRole, action, target, reason, details };
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in addAudit]:", sqlErr.message, "Actor:", actorName, "Action:", action);
+      throw sqlErr;
+    }
   }
 }
 

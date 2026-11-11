@@ -195,6 +195,20 @@ data class ChatMessage(
   val isOfficialDecision: Boolean = false
 )
 
+enum class BackendStatus(val label: String) {
+  ONLINE("Connected (Live Backend)"),
+  CONNECTING("Connecting..."),
+  OFFLINE_CACHE("Local Storage Active (Offline Safe)")
+}
+
+data class BackendConnectionState(
+  val status: BackendStatus = BackendStatus.ONLINE,
+  val serverUrl: String = "http://10.0.2.2:8084/",
+  val databaseEngine: String = "MySQL 8.0 (InnoDB) / Live Microservices",
+  val lastSyncTime: String? = null,
+  val message: String = "Live link online"
+)
+
 data class ChatThreadInfo(
   val threadId: String,
   val title: String,
@@ -203,5 +217,10 @@ data class ChatThreadInfo(
   val targetUserId: String? = null,
   val relatedRequestId: String? = null,
   val isLocked: Boolean = false,
-  val lockReason: String? = null
+  val lockReason: String? = null,
+  val groupId: String? = null,
+  val groupName: String? = null,
+  val employeeId: String? = null,
+  val designation: String? = null,
+  val avatarInitials: String? = null
 )

@@ -40,12 +40,29 @@ app.get('/api/v1/calendar/holidays', async (req, res) => {
 // POST /api/v1/calendar/date-lock (CEO 1-tap lock)
 app.post('/api/v1/calendar/date-lock', async (req, res) => {
   try {
+    console.log('[Calendar Service] POST /calendar/date-lock - Body:', req.body);
     const { date, reason, isLocked } = req.body;
     const holiday = await db.setHolidayLock(date, reason, isLocked);
     broadcast('CALENDAR_LOCK_CHANGED', holiday);
+
+    // Audit log the date lock action
+    try {
+      await db.addAudit(
+        "Robert Sterling",
+        "CEO",
+        isLocked ? "LOCK_CALENDAR_DATE" : "UNLOCK_CALENDAR_DATE",
+        date,
+        reason || (isLocked ? "CEO Lock" : "Unlocked"),
+        `Date: ${date} • Locked: ${isLocked}`
+      );
+    } catch (auditErr) {
+      console.error("Calendar date-lock audit error:", auditErr.message);
+    }
+
     res.json(holiday);
   } catch (err) {
-    res.status(500).json({ error: "Failed to update date lock" });
+    console.error("Date lock error:", err);
+    res.status(500).json({ error: "Failed to update date lock: " + err.message });
   }
 });
 
@@ -55,6 +72,7 @@ app.get('/api/v1/chat/messages', async (req, res) => {
     const messages = await db.getChatMessages(req.query.threadId || 'general');
     res.json(messages);
   } catch (err) {
+    console.error("Chat messages fetch error:", err);
     res.status(500).json({ error: "Failed to fetch chat messages" });
   }
 });
@@ -62,13 +80,21 @@ app.get('/api/v1/chat/messages', async (req, res) => {
 // POST /api/v1/chat/messages
 app.post('/api/v1/chat/messages', async (req, res) => {
   try {
+    console.log('[Calendar Service] POST /chat/messages - Body:', req.body);
     const { senderId, message, threadId, relatedRequestId } = req.body;
-    const user = await db.getUser(senderId);
-    if (!user) return res.status(404).json({ error: "Sender not found" });
+    let user = await db.getUser(senderId);
+    if (!user) {
+      const allUsers = await db.getAllUsers();
+      user = allUsers.find(u => u.id === senderId) || {
+        id: senderId || "u_emp1",
+        name: "Alex Chen",
+        role: "EMPLOYEE"
+      };
+    }
 
     const msg = {
       id: "MSG-" + Math.floor(1000 + Math.random() * 9000),
-      senderId,
+      senderId: user.id,
       senderName: user.name,
       senderRole: user.role,
       message,
@@ -81,7 +107,8 @@ app.post('/api/v1/chat/messages', async (req, res) => {
     broadcast('NEW_CHAT_MESSAGE', msg);
     res.status(201).json(msg);
   } catch (err) {
-    res.status(500).json({ error: "Failed to send chat message" });
+    console.error("Chat send error:", err);
+    res.status(500).json({ error: "Failed to send chat message: " + err.message });
   }
 });
 

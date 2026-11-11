@@ -58,7 +58,94 @@ const gateway = express();
 gateway.use(cors());
 gateway.use(express.json());
 
-// Forwarding rules
+// Automatic Request Activity Logging Middleware for POST, PUT, PATCH, DELETE
+gateway.use((req, res, next) => {
+  const startTime = Date.now();
+  const requestId = "req_" + Math.random().toString(36).substring(2, 10);
+
+  // Capture response finish
+  res.on('finish', async () => {
+    const mutatingMethods = ['POST', 'PUT', 'PATCH', 'DELETE'];
+    if (mutatingMethods.includes(req.method)) {
+      const durationMs = Date.now() - startTime;
+      const outcome = res.statusCode < 400 ? 'SUCCESS' : 'FAILURE';
+
+      // Deduce service & action
+      let service = 'api-gateway';
+      if (req.originalUrl.includes('/auth')) service = 'auth-service';
+      else if (req.originalUrl.includes('/leaves')) service = 'workflow-service';
+      else if (req.originalUrl.includes('/calendar') || req.originalUrl.includes('/chat')) service = 'calendar-service';
+
+      const actorUserId = req.body?.userId || req.body?.senderId || req.body?.actorUserId || req.body?.approverUserId || null;
+      const actorRole = req.body?.role || req.body?.senderRole || null;
+
+      const logEntry = {
+        id: "act_" + Math.random().toString(36).substring(2, 12),
+        requestId,
+        service,
+        actorUserId,
+        actorRole,
+        action: `${req.method}_${req.path.replace(/\//g, '_').substring(1)}`,
+        resourceType: req.path.split('/')[3] || 'resource',
+        outcome,
+        httpMethod: req.method,
+        route: req.originalUrl,
+        statusCode: res.statusCode,
+        durationMs,
+        details: {
+          query: req.query,
+          bodyKeys: Object.keys(req.body || {}),
+          ip: req.ip || req.connection.remoteAddress
+        }
+      };
+
+      if (mysqlDb.isAvailable()) {
+        try {
+          await mysqlDb.addActivityLog(logEntry);
+        } catch (logErr) {
+          console.error("Activity logging write error:", logErr.message);
+        }
+      }
+    }
+  });
+
+  next();
+});
+
+// Dedicated endpoint to insert directly into audit_logs from app/clients
+gateway.post('/api/v1/audit/log', async (req, res) => {
+  try {
+    console.log('[Gateway] POST /api/v1/audit/log - Body:', req.body);
+    const { actorName, actorRole, action, target, reason, details } = req.body;
+    const entry = await mysqlDb.addAudit(
+      actorName || 'System',
+      actorRole || 'EMPLOYEE',
+      action || 'ACTION',
+      target || 'UNKNOWN',
+      reason || '',
+      details || ''
+    );
+    res.status(201).json(entry);
+  } catch (err) {
+    console.error("Audit log error in SQL execution:", err);
+    res.status(500).json({ error: "Failed to record audit log: " + err.message });
+  }
+});
+
+// Dedicated endpoint to fetch real MySQL activity logs
+gateway.get('/api/v1/audit/activity-logs', async (req, res) => {
+  try {
+    const logs = await mysqlDb.getActivityLogs();
+    res.json(logs);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch activity logs" });
+  }
+});
+
+// Forwarding rules - mount apps directly so /api/v1/... routes resolve seamlessly
+gateway.use(authApp);
+gateway.use(workflowApp);
+gateway.use(calendarApp);
 gateway.use('/api/v1/auth', authApp);
 gateway.use('/api/v1/leaves', workflowApp);
 gateway.use('/api/v1/audit', workflowApp);

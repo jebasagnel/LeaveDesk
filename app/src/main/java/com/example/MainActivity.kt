@@ -6,6 +6,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -36,6 +37,7 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    repository.initContext(applicationContext)
     enableEdgeToEdge()
     setContent {
       val currentUser by repository.currentUser.collectAsState()
@@ -96,6 +98,9 @@ fun LeaveDeskApp(repository: LeaveDeskRepository) {
 
   var showNotificationsScreen by remember { mutableStateOf(false) }
   var showUserMenu by remember { mutableStateOf(false) }
+  var showBackendDialog by remember { mutableStateOf(false) }
+  val backendState by repository.backendState.collectAsState()
+  var backendUrlInput by remember(backendState.serverUrl) { mutableStateOf(backendState.serverUrl) }
 
   // Auto-dismiss toast after 4 seconds
   LaunchedEffect(toastMessage) {
@@ -123,6 +128,83 @@ fun LeaveDeskApp(repository: LeaveDeskRepository) {
       .background(Color(0xFFE5E7EB)),
     contentAlignment = Alignment.Center
   ) {
+    if (showBackendDialog) {
+      AlertDialog(
+        onDismissRequest = { showBackendDialog = false },
+        title = {
+          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(Icons.Default.Cloud, contentDescription = null, tint = LocalRoleTheme.current.accent)
+            Text("Backend & Database Sync", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+          }
+        },
+        text = {
+          Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Surface(
+              shape = RoundedCornerShape(8.dp),
+              color = if (backendState.status == com.example.model.BackendStatus.ONLINE) Color(0xFFF0FDF4) else Color(0xFFF8FAFC),
+              border = BorderStroke(1.dp, if (backendState.status == com.example.model.BackendStatus.ONLINE) Color(0xFF86EFAC) else CardBorder),
+              modifier = Modifier.fillMaxWidth()
+            ) {
+              Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                  Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(if (backendState.status == com.example.model.BackendStatus.ONLINE) Color(0xFF16A34A) else Color(0xFF64748B)))
+                  Text("Status: ${backendState.status.label}", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = if (backendState.status == com.example.model.BackendStatus.ONLINE) Color(0xFF166534) else Color(0xFF475569))
+                }
+                Text("Engine: ${backendState.databaseEngine}", fontSize = 11.sp, color = TextSecondary)
+                Text("Telemetry: ${backendState.message}", fontSize = 10.sp, color = TextMuted)
+                backendState.lastSyncTime?.let {
+                  Text("Last Synced: $it", fontSize = 10.sp, color = TextMuted)
+                }
+              }
+            }
+
+            Text("Gateway Host URL:", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+            OutlinedTextField(
+              value = backendUrlInput,
+              onValueChange = { backendUrlInput = it },
+              placeholder = { Text("e.g. http://10.0.2.2:8084/ or http://192.168.1.100:8084/") },
+              singleLine = true,
+              modifier = Modifier.fillMaxWidth()
+            )
+            Text("Tip: In emulator use http://10.0.2.2:8084/. On a physical phone on Wi-Fi, enter your PC's IP address.", fontSize = 10.sp, color = TextSecondary)
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              OutlinedButton(
+                onClick = {
+                  repository.updateBackendUrl(backendUrlInput)
+                  repository.testBackendConnection()
+                },
+                modifier = Modifier.weight(1f)
+              ) {
+                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Test Ping", fontSize = 11.sp)
+              }
+              Button(
+                onClick = {
+                  repository.updateBackendUrl(backendUrlInput)
+                  repository.syncWithLiveBackend()
+                  showBackendDialog = false
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = LocalRoleTheme.current.accent),
+                modifier = Modifier.weight(1f)
+              ) {
+                Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Save & Sync", fontSize = 11.sp)
+              }
+            }
+          }
+        },
+        confirmButton = {},
+        dismissButton = {
+          TextButton(onClick = { showBackendDialog = false }) {
+            Text("Close")
+          }
+        }
+      )
+    }
+
     Scaffold(
       modifier = Modifier
         .widthIn(max = 480.dp)
@@ -159,6 +241,35 @@ fun LeaveDeskApp(repository: LeaveDeskRepository) {
               }
             },
             actions = {
+              // Backend Connection Status Indicator
+              Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = if (backendState.status == com.example.model.BackendStatus.ONLINE) Color(0xFFDCFCE7) else Color(0xFFF1F5F9),
+                border = BorderStroke(1.dp, if (backendState.status == com.example.model.BackendStatus.ONLINE) Color(0xFF16A34A) else Color(0xFF94A3B8)),
+                modifier = Modifier
+                  .clickable { showBackendDialog = true }
+                  .testTag("top_bar_backend_chip")
+              ) {
+                Row(
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                  Box(
+                    modifier = Modifier
+                      .size(6.dp)
+                      .clip(CircleShape)
+                      .background(if (backendState.status == com.example.model.BackendStatus.ONLINE) Color(0xFF16A34A) else Color(0xFF64748B))
+                  )
+                  Text(
+                    text = if (backendState.status == com.example.model.BackendStatus.ONLINE) "Live DB" else "Local DB",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (backendState.status == com.example.model.BackendStatus.ONLINE) Color(0xFF166534) else Color(0xFF475569)
+                  )
+                }
+              }
+
               // Notifications Bell with Unread Badge
               IconButton(
                 onClick = { showNotificationsScreen = !showNotificationsScreen },
