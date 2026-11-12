@@ -634,33 +634,42 @@ fun CeoApprovalsScreen(
               Spacer(modifier = Modifier.height(10.dp))
               Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
               ) {
                 Button(
                   onClick = { repository.ceoApproveRequest(req, currentUser, "Approved by CEO") },
                   colors = ButtonDefaults.buttonColors(containerColor = StatusApprovedGreen),
                   shape = RoundedCornerShape(8.dp),
-                  modifier = Modifier.weight(1f)
+                  contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+                  modifier = Modifier
+                    .weight(1f)
+                    .defaultMinSize(minHeight = 44.dp)
                 ) {
-                  Text("Approve", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                  Text("Approve", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                 }
 
                 Button(
                   onClick = { queryDialogFor = req },
                   colors = ButtonDefaults.buttonColors(containerColor = CeoPurple),
                   shape = RoundedCornerShape(8.dp),
-                  modifier = Modifier.weight(1f)
+                  contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+                  modifier = Modifier
+                    .weight(1f)
+                    .defaultMinSize(minHeight = 44.dp)
                 ) {
-                  Text("Query", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                  Text("Query", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                 }
 
                 Button(
                   onClick = { rejectDialogFor = req },
                   colors = ButtonDefaults.buttonColors(containerColor = StatusRejectedRed),
                   shape = RoundedCornerShape(8.dp),
-                  modifier = Modifier.weight(1f)
+                  contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+                  modifier = Modifier
+                    .weight(1f)
+                    .defaultMinSize(minHeight = 44.dp)
                 ) {
-                  Text("Reject", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                  Text("Reject", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                 }
               }
             }

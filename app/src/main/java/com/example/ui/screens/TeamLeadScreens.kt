@@ -550,12 +550,14 @@ fun TeamLeadRequestsScreen(
       color = TextPrimary
     )
 
-    // Filter Chips
-    Row(
+    // Responsive Filter Chips Container (Wraps neatly across screen sizes)
+    @OptIn(ExperimentalLayoutApi::class)
+    FlowRow(
       modifier = Modifier
         .fillMaxWidth()
-        .horizontalScroll(rememberScrollState()),
-      horizontalArrangement = Arrangement.spacedBy(8.dp)
+        .padding(vertical = 4.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
       listOf(
         "PENDING" to "Pending Review",
@@ -564,10 +566,27 @@ fun TeamLeadRequestsScreen(
         "REJECTED" to "Rejected",
         "ALL" to "All"
       ).forEach { (code, title) ->
+        val count = when (code) {
+          "PENDING" -> allRequests.count { it.groupId == myGroup?.id && it.userId != currentUser.id && (it.status == LeaveStatus.PENDING || it.status == LeaveStatus.QUERY) }
+          "CANCEL_REQUESTED" -> allRequests.count { it.groupId == myGroup?.id && it.userId != currentUser.id && it.cancelRequested }
+          "APPROVED" -> allRequests.count { it.groupId == myGroup?.id && it.userId != currentUser.id && it.status == LeaveStatus.APPROVED }
+          "REJECTED" -> allRequests.count { it.groupId == myGroup?.id && it.userId != currentUser.id && it.status == LeaveStatus.REJECTED }
+          else -> allRequests.count { it.groupId == myGroup?.id && it.userId != currentUser.id }
+        }
         FilterChip(
           selected = selectedFilter == code,
           onClick = { selectedFilter = code },
-          label = { Text(title, fontSize = 12.sp) }
+          label = {
+            Text(
+              text = if (count > 0) "$title ($count)" else title,
+              fontSize = 11.5.sp,
+              maxLines = 1
+            )
+          },
+          colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = TeamLeadIndigoLight,
+            selectedLabelColor = TeamLeadIndigo
+          )
         )
       }
     }
@@ -772,49 +791,64 @@ fun TeamLeadRequestsScreen(
               Spacer(modifier = Modifier.height(10.dp))
               Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
               ) {
                 if (req.status == LeaveStatus.PENDING) {
                   Button(
                     onClick = { repository.tlApproveRequest(req, currentUser, "Endorsed by Team Lead") },
                     colors = ButtonDefaults.buttonColors(containerColor = StatusApprovedGreen),
                     shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
                     modifier = Modifier
                       .weight(1f)
+                      .defaultMinSize(minHeight = 44.dp)
                       .testTag("tl_approve_btn_${req.id.lowercase()}")
                   ) {
-                    Text(if (req.requiresCeoApproval) "Endorse" else "Approve", fontSize = 12.sp)
+                    Text(
+                      text = if (req.requiresCeoApproval) "Endorse" else "Approve",
+                      fontSize = 12.sp,
+                      fontWeight = FontWeight.Bold,
+                      maxLines = 1
+                    )
                   }
 
                   OutlinedButton(
                     onClick = { queryDialogFor = req },
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = CeoPurple),
                     shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.weight(1f)
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+                    modifier = Modifier
+                      .weight(1f)
+                      .defaultMinSize(minHeight = 44.dp)
                   ) {
-                    Text("Query", fontSize = 12.sp)
+                    Text("Query", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                   }
 
                   Button(
                     onClick = { rejectDialogFor = req },
                     colors = ButtonDefaults.buttonColors(containerColor = StatusRejectedRed),
                     shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
                     modifier = Modifier
                       .weight(1f)
+                      .defaultMinSize(minHeight = 44.dp)
                       .testTag("tl_reject_btn_${req.id.lowercase()}")
                   ) {
-                    Text("Reject", fontSize = 12.sp)
+                    Text("Reject", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                   }
                 } else if (req.status == LeaveStatus.APPROVED) {
                   Button(
                     onClick = { emergencyCancelFor = req },
                     colors = ButtonDefaults.buttonColors(containerColor = StatusRejectedRed),
                     shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .defaultMinSize(minHeight = 44.dp)
                   ) {
                     Icon(Icons.Default.Cancel, contentDescription = null, modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Emergency Cancel / Postpone", fontSize = 12.sp)
+                    Text("Emergency Cancel / Postpone", fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                   }
                 }
               }
@@ -825,3 +859,759 @@ fun TeamLeadRequestsScreen(
     }
   }
 }
+
+@Composable
+fun TeamLeadMyLeavesScreen(
+  repository: LeaveDeskRepository,
+  modifier: Modifier = Modifier
+) {
+  val currentUser by repository.currentUser.collectAsState()
+  val allRequests by repository.leaveRequests.collectAsState()
+  val allUsers by repository.users.collectAsState()
+  val userBalances by repository.userBalances.collectAsState()
+  val context = LocalContext.current
+
+  // 0 = My History, 1 = Apply for Leave
+  var activeTab by remember { mutableStateOf(0) }
+  var selectedFilter by remember { mutableStateOf("ALL") }
+
+  // Form State for TL Applying for Leave
+  var selectedType by remember { mutableStateOf(LeaveType.CL) }
+  var startDate by remember { mutableStateOf(LocalDate.now().plusDays(1)) }
+  var endDate by remember { mutableStateOf(LocalDate.now().plusDays(2)) }
+  var isHalfDay by remember { mutableStateOf(false) }
+  var halfDaySession by remember { mutableStateOf("First Half") }
+  var selectedBackupUser by remember { mutableStateOf<User?>(null) }
+  var backupTaskNote by remember { mutableStateOf("") }
+  var reason by remember { mutableStateOf("") }
+  var uploadedProof by remember { mutableStateOf<LeaveProof?>(null) }
+
+  var showStartDatePicker by remember { mutableStateOf(false) }
+  var showEndDatePicker by remember { mutableStateOf(false) }
+
+  val galleryLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.PickVisualMedia()
+  ) { uri: Uri? ->
+    if (uri != null) {
+      uploadedProof = resolveProofFromUri(context, uri)
+    }
+  }
+  val docLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.GetContent()
+  ) { uri: Uri? ->
+    if (uri != null) {
+      uploadedProof = resolveProofFromUri(context, uri)
+    }
+  }
+
+  // Live Validation
+  val validation = remember(currentUser, selectedType, startDate, endDate, isHalfDay, uploadedProof) {
+    repository.validateLeaveApplication(
+      user = currentUser,
+      leaveType = selectedType,
+      startDate = startDate,
+      endDate = endDate,
+      isHalfDay = isHalfDay,
+      hasProof = uploadedProof != null
+    )
+  }
+
+  val myOwnRequests = remember(allRequests, currentUser, selectedFilter) {
+    val list = allRequests.filter { it.userId == currentUser.id }
+    when (selectedFilter) {
+      "PENDING" -> list.filter { it.status == LeaveStatus.PENDING || it.status == LeaveStatus.QUERY }
+      "APPROVED" -> list.filter { it.status == LeaveStatus.APPROVED }
+      "REJECTED" -> list.filter { it.status == LeaveStatus.REJECTED }
+      else -> list
+    }
+  }
+
+  val myQuotas = remember(userBalances, currentUser) {
+    userBalances[currentUser.id] ?: emptyList()
+  }
+
+  val peerCandidates = remember(allUsers, currentUser) {
+    allUsers.filter { it.id != currentUser.id }
+  }
+
+  // Dialog states for TL's own requests
+  var cancelReasonDialogFor by remember { mutableStateOf<LeaveRequest?>(null) }
+  var cancelReasonText by remember { mutableStateOf("") }
+
+  cancelReasonDialogFor?.let { req ->
+    AlertDialog(
+      onDismissRequest = { cancelReasonDialogFor = null },
+      title = { Text("Request Leave Cancellation", fontWeight = FontWeight.Bold) },
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Text("A cancellation request will be submitted directly to CEO for approval.", fontSize = 12.sp, color = TextSecondary)
+          OutlinedTextField(
+            value = cancelReasonText,
+            onValueChange = { cancelReasonText = it },
+            label = { Text("Reason for cancellation *") },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 2
+          )
+        }
+      },
+      confirmButton = {
+        Button(
+          onClick = {
+            repository.employeeRequestCancel(req, currentUser, cancelReasonText)
+            cancelReasonDialogFor = null
+            cancelReasonText = ""
+          },
+          enabled = cancelReasonText.isNotBlank(),
+          colors = ButtonDefaults.buttonColors(containerColor = StatusRejectedRed)
+        ) {
+          Text("Confirm Cancel")
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = { cancelReasonDialogFor = null }) {
+          Text("Dismiss")
+        }
+      }
+    )
+  }
+
+  if (showStartDatePicker) {
+    CalendarDatePickerDialog(
+      title = "Select Start Date",
+      initialDate = startDate,
+      onDateSelected = {
+        startDate = it
+        if (endDate.isBefore(startDate)) endDate = startDate
+      },
+      onDismiss = { showStartDatePicker = false }
+    )
+  }
+
+  if (showEndDatePicker) {
+    CalendarDatePickerDialog(
+      title = "Select End Date",
+      initialDate = endDate,
+      minDate = startDate,
+      onDateSelected = {
+        if (!it.isBefore(startDate)) endDate = it
+      },
+      onDismiss = { showEndDatePicker = false }
+    )
+  }
+
+  Scaffold(
+    modifier = modifier.fillMaxSize(),
+    floatingActionButton = {
+      if (activeTab == 0) {
+        ExtendedFloatingActionButton(
+          onClick = { activeTab = 1 },
+          containerColor = TeamLeadIndigo,
+          contentColor = Color.White,
+          icon = { Icon(Icons.Default.Add, contentDescription = "Apply Leave") },
+          text = { Text("Apply for Leave", fontWeight = FontWeight.Bold, maxLines = 1) },
+          modifier = Modifier.testTag("tl_fab_apply_leave")
+        )
+      }
+    }
+  ) { paddingValues ->
+    Column(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(paddingValues)
+        .padding(16.dp),
+      verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+      // Header & Navigation Toggle
+      Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = TeamLeadSurface),
+        border = BorderStroke(1.dp, TeamLeadIndigoLight),
+        modifier = Modifier.fillMaxWidth()
+      ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "My Personal Leaves",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
+              )
+              Text(
+                text = "Direct CEO Escalation • Bypasses Peer Review",
+                fontSize = 11.5.sp,
+                color = TeamLeadIndigo,
+                fontWeight = FontWeight.SemiBold
+              )
+            }
+            RoleBadge(UserRole.TEAM_LEAD)
+          }
+
+          // Tab Selector Row
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            FilterChip(
+              selected = activeTab == 0,
+              onClick = { activeTab = 0 },
+              label = {
+                Text(
+                  text = "My History (${myOwnRequests.size})",
+                  fontWeight = if (activeTab == 0) FontWeight.Bold else FontWeight.Normal
+                )
+              },
+              leadingIcon = {
+                Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(16.dp))
+              },
+              modifier = Modifier.weight(1f)
+            )
+
+            FilterChip(
+              selected = activeTab == 1,
+              onClick = { activeTab = 1 },
+              label = {
+                Text(
+                  text = "Apply for Leave",
+                  fontWeight = if (activeTab == 1) FontWeight.Bold else FontWeight.Normal
+                )
+              },
+              leadingIcon = {
+                Icon(Icons.Default.AddCircleOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+              },
+              colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = TeamLeadIndigo,
+                selectedLabelColor = Color.White,
+                selectedLeadingIconColor = Color.White
+              ),
+              modifier = Modifier.weight(1f)
+            )
+          }
+        }
+      }
+
+      if (activeTab == 0) {
+        // --- TAB 0: TL LEAVE HISTORY ---
+        @OptIn(ExperimentalLayoutApi::class)
+        FlowRow(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+          listOf(
+            "ALL" to "All",
+            "PENDING" to "Pending CEO",
+            "APPROVED" to "Approved",
+            "REJECTED" to "Rejected"
+          ).forEach { (code, label) ->
+            FilterChip(
+              selected = selectedFilter == code,
+              onClick = { selectedFilter = code },
+              label = { Text(label, fontSize = 11.sp) }
+            )
+          }
+        }
+
+        if (myOwnRequests.isEmpty()) {
+          Card(
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            border = BorderStroke(1.dp, CardBorder),
+            modifier = Modifier
+              .fillMaxWidth()
+              .weight(1f)
+          ) {
+            Box(
+              modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+              contentAlignment = Alignment.Center
+            ) {
+              Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+              ) {
+                Icon(Icons.Default.EventBusy, contentDescription = null, tint = TextMuted, modifier = Modifier.size(48.dp))
+                Text("No personal leave requests found.", color = TextMuted, fontSize = 14.sp)
+                Button(
+                  onClick = { activeTab = 1 },
+                  colors = ButtonDefaults.buttonColors(containerColor = TeamLeadIndigo),
+                  shape = RoundedCornerShape(8.dp)
+                ) {
+                  Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text("Apply Now (Direct to CEO)")
+                }
+              }
+            }
+          }
+        } else {
+          LazyColumn(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+          ) {
+            items(myOwnRequests, key = { it.id }) { req ->
+              Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                border = BorderStroke(1.dp, CardBorder),
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                Column(
+                  modifier = Modifier.padding(14.dp),
+                  verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    Row(
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                      LeaveTypeBadge(req.leaveType)
+                      Text(
+                        text = req.id,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                      )
+                      Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = CeoPurple.copy(alpha = 0.12f)
+                      ) {
+                        Text(
+                          text = "Routed to CEO",
+                          fontSize = 10.sp,
+                          color = CeoPurple,
+                          fontWeight = FontWeight.Bold,
+                          modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                      }
+                    }
+                    LeaveStatusBadge(req.status)
+                  }
+
+                  Text(
+                    text = "${req.startDate} to ${req.endDate} (${req.workingDays} working days${if (req.isHalfDay) ", ${req.halfDaySession ?: "Half-Day"}" else ""})",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary
+                  )
+
+                  Text(
+                    text = "Reason: ${req.reason}",
+                    fontSize = 12.sp,
+                    color = TextSecondary
+                  )
+
+                  if (!req.backupUserName.isNullOrBlank()) {
+                    Text(
+                      text = "Handover: ${req.backupUserName} • ${req.backupTaskNote ?: "No note"}",
+                      fontSize = 11.sp,
+                      color = TextMuted
+                    )
+                  }
+
+                  if (req.ceoStep != null) {
+                    Surface(
+                      shape = RoundedCornerShape(6.dp),
+                      color = CeoPurpleLight.copy(alpha = 0.5f),
+                      modifier = Modifier.fillMaxWidth()
+                    ) {
+                      Row(
+                        modifier = Modifier.padding(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                      ) {
+                        Icon(Icons.Default.Verified, contentDescription = null, tint = CeoPurple, modifier = Modifier.size(16.dp))
+                        Text(
+                          text = "CEO ${req.ceoStep.approverName}: \"${req.ceoStep.remarks ?: req.ceoStep.decision.name}\"",
+                          fontSize = 11.5.sp,
+                          color = CeoPurple,
+                          fontWeight = FontWeight.Medium
+                        )
+                      }
+                    }
+                  }
+
+                  // Action Buttons
+                  if (req.status == LeaveStatus.PENDING) {
+                    Row(
+                      modifier = Modifier.fillMaxWidth(),
+                      horizontalArrangement = Arrangement.End
+                    ) {
+                      OutlinedButton(
+                        onClick = { repository.employeeWithdrawRequest(req, currentUser) },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = StatusRejectedRed),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                      ) {
+                        Text("Withdraw Request", fontSize = 11.5.sp)
+                      }
+                    }
+                  } else if (req.status == LeaveStatus.APPROVED && !req.cancelRequested) {
+                    Row(
+                      modifier = Modifier.fillMaxWidth(),
+                      horizontalArrangement = Arrangement.End
+                    ) {
+                      OutlinedButton(
+                        onClick = { cancelReasonDialogFor = req },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = StatusRejectedRed),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                      ) {
+                        Text("Request Cancellation", fontSize = 11.5.sp)
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      } else {
+        // --- TAB 1: TL LEAVE APPLICATION FORM (DIRECT TO CEO) ---
+        Column(
+          modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+          verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+          // Executive Bypassing Notice Banner
+          Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = CeoPurple.copy(alpha = 0.10f),
+            border = BorderStroke(1.dp, CeoPurple.copy(alpha = 0.25f)),
+            modifier = Modifier.fillMaxWidth()
+          ) {
+            Row(
+              modifier = Modifier.padding(12.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+              Icon(Icons.Default.Security, contentDescription = null, tint = CeoPurple, modifier = Modifier.size(24.dp))
+              Column {
+                Text(
+                  text = "Direct CEO Escalation",
+                  fontSize = 13.sp,
+                  fontWeight = FontWeight.Bold,
+                  color = CeoPurple
+                )
+                Text(
+                  text = "As Team Lead, your application bypasses peer review and is submitted directly to Chief Executive Officer Robert Sterling.",
+                  fontSize = 11.sp,
+                  color = TextSecondary
+                )
+              }
+            }
+          }
+
+          // Leave Type Selector Card
+          Card(
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            border = BorderStroke(1.dp, CardBorder),
+            modifier = Modifier.fillMaxWidth()
+          ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+              Text("Select Leave Category", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+              @OptIn(ExperimentalLayoutApi::class)
+              FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                LeaveType.entries.forEach { type ->
+                  val quota = myQuotas.find { it.leaveType == type }
+                  val remaining = quota?.remaining ?: 0f
+                  FilterChip(
+                    selected = selectedType == type,
+                    onClick = { selectedType = type },
+                    label = {
+                      Text(
+                        text = if (type.isNoCap) type.code else "${type.code} (${remaining.toInt()})",
+                        fontSize = 11.5.sp
+                      )
+                    },
+                    colors = FilterChipDefaults.filterChipColors(
+                      selectedContainerColor = TeamLeadIndigo,
+                      selectedLabelColor = Color.White
+                    )
+                  )
+                }
+              }
+            }
+          }
+
+          // Dates Card
+          Card(
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            border = BorderStroke(1.dp, CardBorder),
+            modifier = Modifier.fillMaxWidth()
+          ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+              Text("Dates & Duration", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+              ) {
+                OutlinedButton(
+                  onClick = { showStartDatePicker = true },
+                  modifier = Modifier.weight(1f),
+                  shape = RoundedCornerShape(8.dp)
+                ) {
+                  Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Start Date", fontSize = 10.sp, color = TextMuted)
+                    Text(startDate.toString(), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                  }
+                }
+
+                OutlinedButton(
+                  onClick = { if (!isHalfDay) showEndDatePicker = true },
+                  enabled = !isHalfDay,
+                  modifier = Modifier.weight(1f),
+                  shape = RoundedCornerShape(8.dp)
+                ) {
+                  Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("End Date", fontSize = 10.sp, color = TextMuted)
+                    Text(if (isHalfDay) startDate.toString() else endDate.toString(), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                  }
+                }
+              }
+
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                  Checkbox(
+                    checked = isHalfDay,
+                    onCheckedChange = {
+                      isHalfDay = it
+                      if (it) endDate = startDate
+                    }
+                  )
+                  Text("Half-Day Session", fontSize = 13.sp)
+                }
+
+                if (isHalfDay) {
+                  Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(
+                      selected = halfDaySession == "First Half",
+                      onClick = { halfDaySession = "First Half" },
+                      label = { Text("1st Half", fontSize = 10.sp) }
+                    )
+                    FilterChip(
+                      selected = halfDaySession == "Second Half",
+                      onClick = { halfDaySession = "Second Half" },
+                      label = { Text("2nd Half", fontSize = 10.sp) }
+                    )
+                  }
+                }
+              }
+
+              Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = NeutralSurface,
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                Row(
+                  modifier = Modifier.padding(10.dp),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Text("Calculated Working Days:", fontSize = 12.sp, color = TextSecondary)
+                  Text(
+                    text = "${validation.workingDays} Day(s)",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TeamLeadIndigo
+                  )
+                }
+              }
+            }
+          }
+
+          // Handover Peer Selection
+          Card(
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            border = BorderStroke(1.dp, CardBorder),
+            modifier = Modifier.fillMaxWidth()
+          ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+              Text("Task Handover / Stand-In Peer", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+              Text("Assign a peer lead or team member to handle escalations while away.", fontSize = 11.5.sp, color = TextSecondary)
+
+              @OptIn(ExperimentalLayoutApi::class)
+              FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                peerCandidates.take(6).forEach { user ->
+                  FilterChip(
+                    selected = selectedBackupUser?.id == user.id,
+                    onClick = {
+                      selectedBackupUser = if (selectedBackupUser?.id == user.id) null else user
+                    },
+                    label = { Text("${user.name} (${user.role.displayName})", fontSize = 11.sp) }
+                  )
+                }
+              }
+
+              OutlinedTextField(
+                value = backupTaskNote,
+                onValueChange = { backupTaskNote = it },
+                label = { Text("Handover Notes / On-Call Protocol") },
+                placeholder = { Text("e.g. Elena will cover operational escalations...") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 2
+              )
+            }
+          }
+
+          // Reason & Document Proof
+          Card(
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            border = BorderStroke(1.dp, CardBorder),
+            modifier = Modifier.fillMaxWidth()
+          ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+              Text("Reason & Documentation", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+
+              OutlinedTextField(
+                value = reason,
+                onValueChange = { reason = it },
+                label = { Text("Reason for Leave *") },
+                placeholder = { Text("Provide details for CEO review...") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 2
+              )
+
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                OutlinedButton(
+                  onClick = { galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                  shape = RoundedCornerShape(8.dp),
+                  contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                  modifier = Modifier.weight(1f)
+                ) {
+                  Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp))
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text("Attach Photo", fontSize = 11.sp, maxLines = 1)
+                }
+
+                OutlinedButton(
+                  onClick = { docLauncher.launch("*/*") },
+                  shape = RoundedCornerShape(8.dp),
+                  contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                  modifier = Modifier.weight(1f)
+                ) {
+                  Icon(Icons.Default.AttachFile, contentDescription = null, modifier = Modifier.size(16.dp))
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text("Attach File", fontSize = 11.sp, maxLines = 1)
+                }
+              }
+
+              uploadedProof?.let { proof ->
+                Surface(
+                  shape = RoundedCornerShape(6.dp),
+                  color = TeamLeadSurface,
+                  border = BorderStroke(1.dp, TeamLeadIndigo.copy(alpha = 0.3f)),
+                  modifier = Modifier.fillMaxWidth()
+                ) {
+                  Row(
+                    modifier = Modifier.padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                  ) {
+                    Text("Attached: ${proof.fileName} (${proof.fileSizeStr})", fontSize = 11.sp, color = TeamLeadIndigo)
+                    IconButton(onClick = { uploadedProof = null }, modifier = Modifier.size(24.dp)) {
+                      Icon(Icons.Default.Close, contentDescription = "Remove proof", modifier = Modifier.size(16.dp))
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          // Validation Message Banner
+          if (validation.message != null) {
+            Surface(
+              shape = RoundedCornerShape(8.dp),
+              color = if (validation.isValid) Color(0xFFFEF3C7) else Color(0xFFFEE2E2),
+              modifier = Modifier.fillMaxWidth()
+            ) {
+              Text(
+                text = validation.message,
+                fontSize = 11.5.sp,
+                color = if (validation.isValid) Color(0xFF92400E) else StatusRejectedRed,
+                modifier = Modifier.padding(10.dp)
+              )
+            }
+          }
+
+          // Dynamic Scaling Action Button
+          Button(
+            onClick = {
+              val ok = repository.submitLeaveRequest(
+                user = currentUser,
+                leaveType = selectedType,
+                startDate = startDate,
+                endDate = endDate,
+                isHalfDay = isHalfDay,
+                halfDaySession = if (isHalfDay) halfDaySession else null,
+                reason = reason.ifBlank { "${selectedType.title} Application" },
+                backupUser = selectedBackupUser,
+                backupTaskNote = backupTaskNote.ifBlank { null },
+                proof = uploadedProof
+              )
+              if (ok) {
+                repository.showToast("Leave application submitted directly to CEO for approval!")
+                activeTab = 0 // Switch to History
+              }
+            },
+            enabled = validation.isValid && reason.isNotBlank(),
+            colors = ButtonDefaults.buttonColors(containerColor = TeamLeadIndigo),
+            shape = RoundedCornerShape(10.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier
+              .fillMaxWidth()
+              .defaultMinSize(minHeight = 48.dp)
+              .testTag("tl_submit_leave_btn")
+          ) {
+            Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Submit Application to CEO", fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+          }
+
+          OutlinedButton(
+            onClick = { activeTab = 0 },
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier
+              .fillMaxWidth()
+              .defaultMinSize(minHeight = 44.dp)
+          ) {
+            Text("Cancel and View History", fontSize = 13.sp)
+          }
+
+          Spacer(modifier = Modifier.height(20.dp))
+        }
+      }
+    }
+  }
+}
+

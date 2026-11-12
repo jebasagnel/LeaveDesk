@@ -467,7 +467,7 @@ fun LeaveDeskApp(repository: LeaveDeskRepository) {
               }
 
               AppDestination.MY_LEAVES -> {
-                EmployeeRequestsScreen(repository = repository)
+                TeamLeadMyLeavesScreen(repository = repository)
               }
 
               AppDestination.DASHBOARD -> {

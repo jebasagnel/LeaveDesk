@@ -270,126 +270,189 @@ class MySQLDatabase {
     console.log('✅ [MySQL] Initial seed completed successfully.');
   }
 
+  // --- TRANSACTION SUPPORT ---
+  async executeTransaction(actionFn) {
+    if (!this.pool) throw new Error("Database pool is not active");
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const result = await actionFn(connection);
+      await connection.commit();
+      return result;
+    } catch (sqlErr) {
+      await connection.rollback();
+      console.error("❌ [MySQL Transaction Rollback Error]:", sqlErr.sqlMessage || sqlErr.message, sqlErr);
+      throw sqlErr;
+    } finally {
+      connection.release();
+    }
+  }
+
   // --- QUERY & WRITE OPERATIONS (STRICT PARAMETERIZED SQL) ---
 
   async findUserByIdentifier(identifier) {
     if (!this.pool) throw new Error("Database pool is not active");
-    const clean = identifier.trim().toLowerCase();
-    const [rows] = await this.pool.query(
-      `SELECT id, employee_id as employeeId, name, email, password_hash as password, role,
-              group_id as groupId, group_name as groupName, designation, avatar_initials as avatarInitials
-       FROM users WHERE LOWER(employee_id) = ? OR LOWER(email) = ? LIMIT 1`,
-      [clean, clean]
-    );
-    return rows[0] || null;
+    try {
+      const clean = identifier.trim().toLowerCase();
+      const [rows] = await this.pool.query(
+        `SELECT id, employee_id as employeeId, name, email, password_hash as password, role,
+                group_id as groupId, group_name as groupName, designation, avatar_initials as avatarInitials
+         FROM users WHERE LOWER(employee_id) = ? OR LOWER(email) = ? LIMIT 1`,
+        [clean, clean]
+      );
+      return rows[0] || null;
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in findUserByIdentifier]:", sqlErr.sqlMessage || sqlErr.message, "Identifier:", identifier);
+      throw sqlErr;
+    }
   }
 
   async getUser(id) {
     if (!this.pool) throw new Error("Database pool is not active");
-    const [rows] = await this.pool.query(
-      `SELECT id, employee_id as employeeId, name, email, password_hash as password, role,
-              group_id as groupId, group_name as groupName, designation, avatar_initials as avatarInitials
-       FROM users WHERE id = ? LIMIT 1`,
-      [id]
-    );
-    return rows[0] || null;
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT id, employee_id as employeeId, name, email, password_hash as password, role,
+                group_id as groupId, group_name as groupName, designation, avatar_initials as avatarInitials
+         FROM users WHERE id = ? LIMIT 1`,
+        [id]
+      );
+      return rows[0] || null;
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in getUser]:", sqlErr.sqlMessage || sqlErr.message, "ID:", id);
+      throw sqlErr;
+    }
   }
 
   async getAllUsers() {
     if (!this.pool) throw new Error("Database pool is not active");
-    const [rows] = await this.pool.query(
-      `SELECT id, employee_id as employeeId, name, email, role,
-              group_id as groupId, group_name as groupName, designation, avatar_initials as avatarInitials
-       FROM users ORDER BY name ASC`
-    );
-    return rows;
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT id, employee_id as employeeId, name, email, role,
+                group_id as groupId, group_name as groupName, designation, avatar_initials as avatarInitials
+         FROM users ORDER BY name ASC`
+      );
+      return rows;
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in getAllUsers]:", sqlErr.sqlMessage || sqlErr.message);
+      throw sqlErr;
+    }
   }
 
   async getTeamMembers(groupId) {
     if (!this.pool) throw new Error("Database pool is not active");
-    const [rows] = await this.pool.query(
-      `SELECT id, employee_id as employeeId, name, email, role,
-              group_id as groupId, group_name as groupName, designation, avatar_initials as avatarInitials
-       FROM users WHERE group_id = ? ORDER BY name ASC`,
-      [groupId]
-    );
-    return rows;
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT id, employee_id as employeeId, name, email, role,
+                group_id as groupId, group_name as groupName, designation, avatar_initials as avatarInitials
+         FROM users WHERE group_id = ? ORDER BY name ASC`,
+        [groupId]
+      );
+      return rows;
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in getTeamMembers]:", sqlErr.sqlMessage || sqlErr.message, "GroupId:", groupId);
+      throw sqlErr;
+    }
   }
 
   async getGroup(id) {
     if (!this.pool) throw new Error("Database pool is not active");
-    const [teams] = await this.pool.query(`SELECT * FROM teams WHERE id = ? LIMIT 1`, [id]);
-    if (!teams[0]) return null;
-    const [members] = await this.pool.query(`SELECT id FROM users WHERE group_id = ?`, [id]);
-    return {
-      id: teams[0].id,
-      name: teams[0].name,
-      tlUserId: teams[0].tl_user_id,
-      tlName: teams[0].tl_name,
-      minPresentThreshold: teams[0].min_present_threshold,
-      memberIds: members.map(m => m.id)
-    };
+    try {
+      const [teams] = await this.pool.query(`SELECT * FROM teams WHERE id = ? LIMIT 1`, [id]);
+      if (!teams[0]) return null;
+      const [members] = await this.pool.query(`SELECT id FROM users WHERE group_id = ?`, [id]);
+      return {
+        id: teams[0].id,
+        name: teams[0].name,
+        tlUserId: teams[0].tl_user_id,
+        tlName: teams[0].tl_name,
+        minPresentThreshold: teams[0].min_present_threshold,
+        memberIds: members.map(m => m.id)
+      };
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in getGroup]:", sqlErr.sqlMessage || sqlErr.message, "ID:", id);
+      throw sqlErr;
+    }
   }
 
   async getQuotas(userId) {
     if (!this.pool) throw new Error("Database pool is not active");
-    const [rows] = await this.pool.query(
-      `SELECT leave_type as leaveType, total_quota as total, used_quota as used, is_no_cap as isNoCap
-       FROM user_quotas WHERE user_id = ?`,
-      [userId]
-    );
-    return rows;
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT leave_type as leaveType, total_quota as total, used_quota as used, is_no_cap as isNoCap
+         FROM user_quotas WHERE user_id = ?`,
+        [userId]
+      );
+      return rows;
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in getQuotas]:", sqlErr.sqlMessage || sqlErr.message, "UserId:", userId);
+      throw sqlErr;
+    }
   }
 
   async deductQuota(userId, leaveType, days) {
     if (!this.pool) throw new Error("Database pool is not active");
-    await this.pool.query(
-      `UPDATE user_quotas SET used_quota = used_quota + ? WHERE user_id = ? AND leave_type = ? AND is_no_cap = FALSE`,
-      [days, userId, leaveType]
-    );
+    try {
+      await this.pool.query(
+        `UPDATE user_quotas SET used_quota = used_quota + ? WHERE user_id = ? AND leave_type = ? AND is_no_cap = FALSE`,
+        [days, userId, leaveType]
+      );
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in deductQuota]:", sqlErr.sqlMessage || sqlErr.message, "UserId:", userId, "Type:", leaveType);
+      throw sqlErr;
+    }
   }
 
   async restoreQuota(userId, leaveType, days) {
     if (!this.pool) throw new Error("Database pool is not active");
-    await this.pool.query(
-      `UPDATE user_quotas SET used_quota = GREATEST(0, used_quota - ?) WHERE user_id = ? AND leave_type = ? AND is_no_cap = FALSE`,
-      [days, userId, leaveType]
-    );
+    try {
+      await this.pool.query(
+        `UPDATE user_quotas SET used_quota = GREATEST(0, used_quota - ?) WHERE user_id = ? AND leave_type = ? AND is_no_cap = FALSE`,
+        [days, userId, leaveType]
+      );
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in restoreQuota]:", sqlErr.sqlMessage || sqlErr.message, "UserId:", userId, "Type:", leaveType);
+      throw sqlErr;
+    }
   }
 
   async getLeaveRequests(filter = {}) {
     if (!this.pool) throw new Error("Database pool is not active");
-    let query = `
-      SELECT id, user_id as userId, user_name as userName, user_role as userRole,
-             group_id as groupId, group_name as groupName, leave_type as leaveType,
-             DATE_FORMAT(start_date, '%Y-%m-%d') as startDate,
-             DATE_FORMAT(end_date, '%Y-%m-%d') as endDate,
-             working_days as workingDays, is_half_day as isHalfDay,
-             reason, backup_user_id as backupUserId, backup_user_name as backupUserName,
-             backup_note as backupNote, proof_file_name as proofFileName,
-             status, tl_decision as tlDecision, tl_comment as tlComment,
-             ceo_decision as ceoDecision, ceo_comment as ceoComment,
-             cancellation_reason as cancellationReason, created_at as createdAt
-      FROM leave_requests
-    `;
-    const params = [];
-    const conditions = [];
+    try {
+      let query = `
+        SELECT id, user_id as userId, user_name as userName, user_role as userRole,
+               group_id as groupId, group_name as groupName, leave_type as leaveType,
+               DATE_FORMAT(start_date, '%Y-%m-%d') as startDate,
+               DATE_FORMAT(end_date, '%Y-%m-%d') as endDate,
+               working_days as workingDays, is_half_day as isHalfDay,
+               reason, backup_user_id as backupUserId, backup_user_name as backupUserName,
+               backup_note as backupNote, proof_file_name as proofFileName,
+               status, tl_decision as tlDecision, tl_comment as tlComment,
+               ceo_decision as ceoDecision, ceo_comment as ceoComment,
+               cancellation_reason as cancellationReason, created_at as createdAt
+        FROM leave_requests
+      `;
+      const params = [];
+      const conditions = [];
 
-    if (filter.userId) {
-      conditions.push(`user_id = ?`);
-      params.push(filter.userId);
-    } else if (filter.groupId) {
-      conditions.push(`group_id = ?`);
-      params.push(filter.groupId);
+      if (filter.userId) {
+        conditions.push(`user_id = ?`);
+        params.push(filter.userId);
+      } else if (filter.groupId) {
+        conditions.push(`group_id = ?`);
+        params.push(filter.groupId);
+      }
+
+      if (conditions.length > 0) {
+        query += ` WHERE ` + conditions.join(' AND ');
+      }
+      query += ` ORDER BY created_at DESC`;
+
+      const [rows] = await this.pool.query(query, params);
+      return rows;
+    } catch (sqlErr) {
+      console.error("❌ [MySQL Error in getLeaveRequests]:", sqlErr.sqlMessage || sqlErr.message, "Filter:", filter);
+      throw sqlErr;
     }
-
-    if (conditions.length > 0) {
-      query += ` WHERE ` + conditions.join(' AND ');
-    }
-    query += ` ORDER BY created_at DESC`;
-
-    const [rows] = await this.pool.query(query, params);
-    return rows;
   }
 
   async createLeaveRequest(data) {
@@ -400,17 +463,34 @@ class MySQLDatabase {
           id, user_id, user_name, user_role, group_id, group_name,
           leave_type, start_date, end_date, working_days, is_half_day,
           reason, backup_user_id, backup_user_name, backup_note, proof_file_name, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING')`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          user_id = VALUES(user_id), user_name = VALUES(user_name), leave_type = VALUES(leave_type),
+          start_date = VALUES(start_date), end_date = VALUES(end_date), working_days = VALUES(working_days),
+          status = VALUES(status)`,
         [
-          data.id, data.userId, data.userName || 'Employee', data.userRole || 'EMPLOYEE', data.groupId || 'g_eng', data.groupName || 'Engineering',
-          data.leaveType, data.startDate, data.endDate, data.workingDays, data.isHalfDay ? 1 : 0,
-          data.reason || 'General Leave', data.backupUserId || null, data.backupUserName || null,
-          data.backupNote || null, data.proofFileName || null
+          String(data.id || '').trim(),
+          data.userId,
+          data.userName || 'Employee',
+          data.userRole || 'EMPLOYEE',
+          data.groupId || 'g_eng',
+          data.groupName || 'Engineering',
+          data.leaveType,
+          data.startDate,
+          data.endDate,
+          data.workingDays,
+          data.isHalfDay ? 1 : 0,
+          data.reason || 'General Leave',
+          data.backupUserId || null,
+          data.backupUserName || null,
+          data.backupNote || null,
+          data.proofFileName || null,
+          data.status || 'PENDING'
         ]
       );
       return data;
     } catch (sqlErr) {
-      console.error("❌ [MySQL Error in createLeaveRequest]:", sqlErr.message, "Data payload:", data);
+      console.error("❌ [MySQL Error in createLeaveRequest]:", sqlErr.sqlMessage || sqlErr.message, "Data payload:", data);
       throw sqlErr;
     }
   }
@@ -427,13 +507,18 @@ class MySQLDatabase {
     if (updateData.ceoComment) { fields.push('ceo_comment = ?'); values.push(updateData.ceoComment); }
     if (updateData.cancellationReason) { fields.push('cancellation_reason = ?'); values.push(updateData.cancellationReason); }
 
-    values.push(id);
+    const cleanId = String(id || '').trim();
+    const altId = cleanId.toLowerCase().startsWith('lr-') ? cleanId.substring(3) : ('LR-' + cleanId);
+    values.push(cleanId, altId);
+
     try {
-      await this.pool.query(`UPDATE leave_requests SET ${fields.join(', ')} WHERE id = ?`, values);
-      const [rows] = await this.pool.query(`SELECT * FROM leave_requests WHERE id = ?`, [id]);
+      if (fields.length > 0) {
+        await this.pool.query(`UPDATE leave_requests SET ${fields.join(', ')} WHERE id = ? OR id = ?`, values);
+      }
+      const [rows] = await this.pool.query(`SELECT * FROM leave_requests WHERE id = ? OR id = ? LIMIT 1`, [cleanId, altId]);
       return rows[0] || null;
     } catch (sqlErr) {
-      console.error("❌ [MySQL Error in updateLeaveDecision]:", sqlErr.message, "Fields:", fields, "Values:", values);
+      console.error("❌ [MySQL Error in updateLeaveDecision]:", sqlErr.sqlMessage || sqlErr.message, "Fields:", fields, "Values:", values);
       throw sqlErr;
     }
   }

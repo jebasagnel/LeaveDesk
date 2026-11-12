@@ -16,6 +16,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.*
@@ -128,48 +129,57 @@ fun StatCard(
     colors = CardDefaults.cardColors(containerColor = Color.White),
     border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder)
   ) {
-    Row(
+    Column(
       modifier = Modifier
         .fillMaxWidth()
-        .padding(14.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween
+        .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
-      Column(modifier = Modifier.weight(1f)) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
         Text(
           text = title,
-          fontSize = 12.sp,
+          fontSize = 11.5.sp,
           color = TextSecondary,
-          fontWeight = FontWeight.Medium
+          fontWeight = FontWeight.SemiBold,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.weight(1f)
         )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-          text = value,
-          fontSize = 20.sp,
-          color = TextPrimary,
-          fontWeight = FontWeight.Bold
-        )
-        if (!subtitle.isNullOrBlank()) {
-          Spacer(modifier = Modifier.height(2.dp))
-          Text(
-            text = subtitle,
-            fontSize = 11.sp,
-            color = TextMuted
+        Spacer(modifier = Modifier.width(6.dp))
+        Box(
+          modifier = Modifier
+            .size(28.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(color.copy(alpha = 0.12f)),
+          contentAlignment = Alignment.Center
+        ) {
+          Icon(
+            imageVector = icon,
+            contentDescription = title,
+            tint = color,
+            modifier = Modifier.size(16.dp)
           )
         }
       }
-      Box(
-        modifier = Modifier
-          .size(38.dp)
-          .clip(RoundedCornerShape(10.dp))
-          .background(color.copy(alpha = 0.12f)),
-        contentAlignment = Alignment.Center
-      ) {
-        Icon(
-          imageVector = icon,
-          contentDescription = title,
-          tint = color,
-          modifier = Modifier.size(20.dp)
+      Spacer(modifier = Modifier.height(4.dp))
+      Text(
+        text = value,
+        fontSize = 20.sp,
+        color = TextPrimary,
+        fontWeight = FontWeight.Bold,
+        maxLines = 1
+      )
+      if (!subtitle.isNullOrBlank()) {
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+          text = subtitle,
+          fontSize = 10.5.sp,
+          color = TextMuted,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
         )
       }
     }

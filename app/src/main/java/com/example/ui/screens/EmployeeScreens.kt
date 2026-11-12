@@ -1117,13 +1117,13 @@ fun EmployeeApplyScreen(
           },
           enabled = reason.isNotBlank() && validation.isValid,
           colors = ButtonDefaults.buttonColors(containerColor = EmployeeTeal),
-          shape = RoundedCornerShape(10.dp),
+          contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
           modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .defaultMinSize(minHeight = 48.dp)
             .testTag("submit_leave_button")
         ) {
-          Text("Submit Leave Application", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+          Text("Submit Leave Application", fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
         }
       }
     }
@@ -1574,18 +1574,24 @@ fun EmployeeRequestsScreen(
                         onClick = { repository.employeeWithdrawRequest(req, currentUser) },
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = NeutralGrey),
                         shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.weight(1f)
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
+                        modifier = Modifier
+                          .weight(1f)
+                          .defaultMinSize(minHeight = 44.dp)
                       ) {
-                        Text("Withdraw", fontSize = 12.sp)
+                        Text("Withdraw", fontSize = 12.sp, maxLines = 1)
                       }
                       if (isOver24h) {
                         Button(
                           onClick = { repository.sendApproverReminder(req, currentUser) },
                           colors = ButtonDefaults.buttonColors(containerColor = StatusPendingAmber),
                           shape = RoundedCornerShape(8.dp),
-                          modifier = Modifier.weight(1f)
+                          contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
+                          modifier = Modifier
+                            .weight(1f)
+                            .defaultMinSize(minHeight = 44.dp)
                         ) {
-                          Text("Send Reminder", fontSize = 11.sp, color = Color.White)
+                          Text("Send Reminder", fontSize = 11.sp, color = Color.White, maxLines = 1)
                         }
                       }
                     }
@@ -1597,9 +1603,12 @@ fun EmployeeRequestsScreen(
                           onClick = { cancelReasonDialogFor = req },
                           colors = ButtonDefaults.buttonColors(containerColor = StatusRejectedRed),
                           shape = RoundedCornerShape(8.dp),
-                          modifier = Modifier.fillMaxWidth()
+                          contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                          modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = 44.dp)
                         ) {
-                          Text("Request Cancel / Postpone", fontSize = 12.sp)
+                          Text("Request Cancel / Postpone", fontSize = 12.sp, maxLines = 1)
                         }
                       } else {
                         Text(
@@ -1616,16 +1625,22 @@ fun EmployeeRequestsScreen(
                         onClick = { queryReplyDialogFor = req },
                         colors = ButtonDefaults.buttonColors(containerColor = CeoPurple),
                         shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.weight(1f)
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
+                        modifier = Modifier
+                          .weight(1f)
+                          .defaultMinSize(minHeight = 44.dp)
                       ) {
-                        Text("Reply to Query", fontSize = 12.sp)
+                        Text("Reply to Query", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                       }
                       OutlinedButton(
                         onClick = { repository.employeeWithdrawRequest(req, currentUser) },
                         shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.weight(1f)
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
+                        modifier = Modifier
+                          .weight(1f)
+                          .defaultMinSize(minHeight = 44.dp)
                       ) {
-                        Text("Withdraw", fontSize = 12.sp)
+                        Text("Withdraw", fontSize = 12.sp, maxLines = 1)
                       }
                     }
 

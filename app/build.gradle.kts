@@ -76,6 +76,11 @@ secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
   ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
+  ignoreList.add("AUTH_PORT")
+  ignoreList.add("CALENDAR_PORT")
+  ignoreList.add("GATEWAY_PORT")
+  ignoreList.add("MYSQL_.*")
+  ignoreList.add("WORKFLOW_PORT")
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }

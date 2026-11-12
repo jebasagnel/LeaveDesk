@@ -4,7 +4,14 @@ const cors = require('cors');
 const db = require('../../db');
 
 const app = express();
-app.use(cors());
+const corsOptions = {
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning', 'Accept', 'X-Requested-With'],
+  credentials: true
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json());
 
 // Helper: Calculate working days (skipping weekends & holidays)
@@ -133,11 +140,12 @@ app.post('/api/v1/leaves/apply', async (req, res) => {
   }
 });
 
-// POST /api/v1/leaves/:id/decision (Approve / Reject)
-app.post('/api/v1/leaves/:id/decision', async (req, res) => {
+// POST /api/v1/leaves/:leaveId/decision or :id/decision (Approve / Reject)
+app.post(['/api/v1/leaves/:leaveId/decision', '/api/v1/leaves/:id/decision', '/leaves/:leaveId/decision', '/leaves/:id/decision', '/:leaveId/decision', '/:id/decision'], async (req, res) => {
   try {
-    console.log(`[Workflow Service] POST /leaves/${req.params.id}/decision - Body:`, req.body);
-    const { id } = req.params;
+    const rawId = req.params.leaveId || req.params.id;
+    const id = String(rawId || '').trim();
+    console.log(`[Workflow Service] POST /leaves/${id}/decision - Body:`, req.body);
     const { approverUserId, role, approverRole, decision, comment, userId, leaveType, workingDays } = req.body;
 
     let approver = null;
@@ -155,7 +163,11 @@ app.post('/api/v1/leaves/:id/decision', async (req, res) => {
     }
 
     const requests = await db.getRequests();
-    let request = requests.find(r => r.id === id);
+    // Support alphanumeric matching: "LR-41002", "41002", uppercase/lowercase
+    const norm = (s) => String(s || '').trim().toLowerCase();
+    const cleanId = norm(id);
+    const altId = cleanId.startsWith('lr-') ? cleanId.substring(3) : ('lr-' + cleanId);
+    let request = requests.find(r => norm(r.id) === cleanId || norm(r.id) === altId);
 
     // If request not in backend yet (e.g. submitted while client was offline), auto-create record so decision & audit are preserved
     if (!request) {
@@ -354,12 +366,33 @@ app.post('/api/v1/leaves/:id/query', async (req, res) => {
   }
 });
 
+// POST /api/v1/audit/log, /audit/log, /log
+app.post(['/api/v1/audit/log', '/audit/log', '/log'], async (req, res) => {
+  try {
+    console.log('[Workflow / Audit] POST /api/v1/audit/log - Body:', req.body);
+    const { actorName, actorRole, action, target, reason, details } = req.body;
+    const entry = await db.addAudit(
+      actorName || 'System',
+      actorRole || 'EMPLOYEE',
+      action || 'ACTION',
+      target || 'UNKNOWN',
+      reason || '',
+      details || ''
+    );
+    res.status(201).json(entry);
+  } catch (err) {
+    console.error("Audit log error in SQL execution:", err.sqlMessage || err.message || err);
+    res.status(500).json({ error: "Failed to record audit log: " + (err.sqlMessage || err.message) });
+  }
+});
+
 // GET /api/v1/audit/logs
-app.get('/api/v1/audit/logs', async (req, res) => {
+app.get(['/api/v1/audit/logs', '/audit/logs', '/logs'], async (req, res) => {
   try {
     const logs = await db.getAuditLogs();
     res.json(logs);
   } catch (err) {
+    console.error("Audit fetch error in SQL execution:", err.sqlMessage || err.message || err);
     res.status(500).json({ error: "Failed to fetch audit logs" });
   }
 });
